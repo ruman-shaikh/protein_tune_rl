@@ -154,6 +154,8 @@ class OnlineRLSampler:
         }
         logp_sum = torch.zeros(len(model_input["input_ids"]), device=self.device)
         entropy_sum = torch.zeros(len(model_input["input_ids"]), device=self.device)
+        logp_steps = []
+        entropy_steps = []
         finished = torch.zeros_like(logp_sum, dtype=torch.bool, device=self.device)
         samples = []
 
@@ -170,10 +172,13 @@ class OnlineRLSampler:
             samples.append(sample[:, None])
 
             logp = prob_dist.log_prob(sample)
-            logp_sum += logp * (~finished)
+            step_mask = (~finished).float()
+            logp_sum += logp * step_mask
+            logp_steps.append(logp * step_mask)
 
             entropy = prob_dist.entropy()
-            entropy_sum += entropy * (~finished)
+            entropy_sum += entropy * step_mask
+            entropy_steps.append(entropy * step_mask)
 
             just_finished = sample == self.stop_token_id
             finished = torch.logical_or(just_finished, finished)
@@ -192,7 +197,18 @@ class OnlineRLSampler:
         init_sequences["attention_mask"] = model_input["attention_mask"]
         init_sequences["position_ids"] = model_input["position_ids"]
 
-        return sampled_seq, logp_sum, entropy_sum
+        if logp_steps:
+            logp_steps = torch.stack(logp_steps, dim=1)
+            entropy_steps = torch.stack(entropy_steps, dim=1)
+        else:
+            logp_steps = torch.zeros(
+                (len(model_input["input_ids"]), 0), device=self.device
+            )
+            entropy_steps = torch.zeros_like(logp_steps)
+
+        action_mask = model_input["attention_mask"][:, init_sequences["init_size"] :]
+
+        return sampled_seq, logp_sum, entropy_sum, logp_steps, entropy_steps, action_mask
 
 
 class OnlineRLTrainer(Trainer, OnlineRLSampler):
@@ -254,9 +270,17 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
                     continue
 
                 tokenized_batch = self.collator(batch)
-                sampled_seqs, logp, entropy = self._sample_batch(
-                    self.policy, tokenized_batch
-                )
+                (
+                    sampled_seqs,
+                    logp,
+                    entropy,
+                    step_logp,
+                    step_entropy,
+                    action_mask,
+                ) = self._sample_batch(self.policy, tokenized_batch)
+                tokenized_batch["step_logp"] = step_logp
+                tokenized_batch["step_entropy"] = step_entropy
+                tokenized_batch["action_mask"] = action_mask
 
                 reward = torch.zeros(len(sampled_seqs))
                 for i, seq in enumerate(sampled_seqs):

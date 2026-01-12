@@ -7,3 +7,7 @@ def create_optimizer(name, model, **kwargs):
         from protein_tune_rl.optimizer.ppo import PPO
 
         return PPO(policy=model, **kwargs)
+    elif name == "a2c":
+        from protein_tune_rl.optimizer.a2c import A2C
+
+        return A2C(policy=model, **kwargs)

@@ -5,3 +5,14 @@
 *.pdb
 *.fasta
 protein_tune_rl/_version.py
+.venv/
+
+IgLM/
+
+IgLM/
+
+IgLM/
+
+IgLM
+
+test_run/
