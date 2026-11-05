@@ -52,6 +52,11 @@ def create_metric(name):
 
             return IgLMTokenwiseKLDivergence
 
+        if name == "esm_scoring":
+            from protein_tune_rl.metrics.esm_scoring import ESMSequenceScoring
+
+            return ESMSequenceScoring
+
         raise ValueError(f"Unknown metric name: {name}")
     except Exception as e:
         raise RuntimeError(f"Failed to create metric '{name}': {e}") from e
