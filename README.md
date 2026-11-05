@@ -104,7 +104,7 @@ See [project status](PROJECT_STATUS.md) for validation scope and pending work.
 
 - [Report source](paper/main.tex) and [report PDF](paper/ProteinTuneRL_A_Reinforcement_Learning_Perspective_on_Antibody_Design.pdf).
 - [Figure reproduction script](paper/make_plots.py), using retained local run logs.
-- [Project article](https://medium.com/@ruman_shaikh/proteintunerl-a-reinforcement-learning-perspective-on-antibody-design-7d6e4d2a5a35).
+- [Medium article: ProteinTuneRL — A Reinforcement Learning Perspective on Antibody Design](https://medium.com/@ruman_shaikh/proteintunerl-a-reinforcement-learning-perspective-on-antibody-design-7d6e4d2a5a35). **Out of date:** this article describes an earlier project state and does not reflect all subsequent implementation changes, evaluation tools, or known limitations. Use this README and [project status](PROJECT_STATUS.md) for the current state.
 
 Existing figures describe individual historical runs, not multi-seed evidence that
 one algorithm produces better antibodies. Run settings differ across methods.
