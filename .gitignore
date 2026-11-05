@@ -23,6 +23,11 @@ IgLM/
 # Experiment outputs
 test_run/
 
+# Generated LaTeX build records (preserve locally; track source and final figures)
+/paper/main.aux
+/paper/main.log
+/paper/main.out
+
 # LLM / agent tooling
 .claude/
 .codex/

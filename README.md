@@ -1,188 +1,156 @@
-<div align="left">
-  <h2>
-    <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="images/proteintunerl-logo-name-dark.png" width="350">
-    <source media="(prefers-color-scheme: light)" srcset="images/proteintunerl-logo-name-light.png" width="350">
-    <img alt="protlib-designer" src="images/proteintunerl-logo-name-light.png" width="350">
-    </picture>
-  </h2>
-</div>
+# ProteinTuneRL — antibody infilling with reinforcement learning
 
-![Status](https://img.shields.io/badge/Status-Active-green.svg)
-![Python](https://img.shields.io/badge/Python->=3.9-blue.svg)
-[![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+Research fork of [LLNL/protein_tune_rl](https://github.com/LLNL/protein_tune_rl),
+maintained by **Ruman Shaikh**. This fork extends IgLM-based CDR-H3 infilling with
+token-level A2C and Generalised Advantage Estimation (GAE), online-RL correctness
+fixes, and independent sequence and structure evaluation.
 
-**ProteinTuneRL** is a flexible framework for protein sequence optimization using **infilling language models** and **reinforcement learning (RL)**. It supports general-purpose protein design and provides targeted tools for antibody engineering.
+The work studies **proxy optimisation versus policy drift**, not experimentally
+validated improvements in antibody binding or function. Original authors retain
+full attribution; see [upstream documentation](README.upstream.md).
 
-At its core, ProteinTuneRL uses **IgLM** — a transformer-based infilling model — to generate or modify specific regions (e.g. CDR loops) of protein sequences while preserving framework context. It combines this with online and offline RL to steer generation toward desirable properties like stability or binding affinity.
+![Overview of antibody sequence infilling with IgLM](images/antibody_infilling_diagram.png)
 
-<div align="center">
-  <img src="images/antibody_infilling_diagram.png" alt="Overview of ProteinTuneRL's antibody infilling and optimization process" width="700">
-  <p><em>Overview of ProteinTuneRL's antibody infilling and optimization process</em></p>
-</div>
+## What this fork adds
 
----
+| Area | Contribution |
+| --- | --- |
+| Online optimisation | Token-level A2C critic with GAE, terminal rewards, and truncation-aware value bootstrapping |
+| Probability consistency | Match PPO recomputed log probabilities and reference scoring to the sampler's constrained vocabulary |
+| Baselines and KL | Prompt-only learned PPO baseline; corrected scalar adaptive KL controller; KL-inclusive REINFORCE reward baseline |
+| Training mechanics | Policy-device-aware critics, optional PPO gradient clipping, epoch reshuffling, and elapsed-time logging |
+| Reward scope | Optional generated-region-only composition scoring; folding-failure fallback handling |
+| Sequence evaluation | Batched ESM-2 masked pseudo-log-likelihood for the heavy chain or generated span |
+| Structure evaluation | Reference-PDB framework alignment, backbone RMSD, region-length difference, SASA, and mean B-factor |
+| Regression tests | Tensor-level RL tests, tiny-model CPU/DDP optimizer checks, and ESM/PDB evaluation tests |
 
-## 🔬 Key Features
+Online methods include REINFORCE, PPO, and A2C. Offline DPO and DRO are also
+available. Algorithm names do not imply a controlled or multi-seed benchmark.
 
-* **Infilling-Based Generation**: Uses [IgLM](https://www.cell.com/cell-systems/fulltext/S2405-4712(23)00271-5?_returnURL=https%3A%2F%2Flinkinghub.elsevier.com%2Fretrieve%2Fpii%2FS2405471223002715%3Fshowall%3Dtrue) to redesign specific regions (e.g. antibody loops) while attending to the surrounding context.
-* **Reinforcement Learning**: Supports **online RL** (via PPO with KL regularization) and **offline RL** (via [DRO](https://arxiv.org/abs/2405.19107)) to fine-tune models for task-specific objectives.
-* **Antibody Design Ready**: Built-in support for CDR infilling and developability-aware optimization.
-* **General Protein Design**: Flexible masking and reward customization allow applications beyond antibodies.
+## Quickstart
 
----
-
-## 🧠 How It Works
-
-1. **Infilling Model (IgLM)**
-   Protein sequences are modified using IgLM, which can “fill in” masked regions (like CDR loops) of user-defined length based on surrounding context.
-
-2. **Online RL (PPO)**
-   IgLM is fine-tuned using **Proximal Policy Optimization** to maximize a custom reward function while staying close to the original model.
-
-3. **Offline RL (DRO)**
-   A lightweight, sample-efficient method to align IgLM with empirical data from fixed datasets.
-
----
-
-## 🚀 Quickstart
-
-### 1) Clone the repository and create a Python environment
-
-First, clone ProteinTuneRL:
+Python 3.9+ is declared by the package; the regression suite has been exercised
+with Python 3.10. Model weights are supplied separately.
 
 ```bash
-git clone https://github.com/LLNL/protein_tune_rl.git
+git clone --branch new_algo https://github.com/ruman-shaikh/protein_tune_rl.git
 cd protein_tune_rl
-````
-
-Then create and activate a Python environment (using **venv**):
-
-```bash
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-python -m pip install -U pip
+source .venv/bin/activate
+python -m pip install -e '.[dev]'
 ```
 
-Finally, install ProteinTuneRL in editable mode:
+Set the path to an IgLM weights/tokenizer directory, generate configs from the
+templates, and review their dataset paths, run length, and output directory:
 
 ```bash
-pip install -e '.'
-```
-
-### 2) Provide an Infilling Model Directory (IgLM **weights only**)
-
-ProteinTuneRL expects an **infilling language model**. Currently, it is designed to work with **IgLM** ([https://github.com/Graylab/IgLM/tree/main](https://github.com/Graylab/IgLM/tree/main)), which is specifically tailored for antibody design tasks.
-ProteinTuneRL does **not** require the IgLM Python package to be installed.  It only needs a directory containing the **IgLM pretrained weights and tokenizer files**. All examples assume a single path (referred to as `IGLM_DIR`) that points to such a directory.
-
-**Option A — Clone IgLM to obtain the weights (no install)**
-
-```bash
-# You can clone this anywhere (inside or outside this repo)
-git clone https://github.com/Graylab/IgLM.git
-# Use the pretrained weights shipped in the repo, e.g.:
-# IgLM/trained_models/IgLM-S
-```
-
-**Option B — Use any existing weights directory**
-If you already have IgLM weights (e.g., downloaded elsewhere), just note the absolute path to that directory.
-
-Set an environment variable pointing to the model directory (adjust the path to your install):
-
-```bash
-export IGLM_DIR=/path/to/iglm/trained_models/IgLM-S
-# Windows PowerShell:
-# $env:IGLM_DIR="C:\path\to\iglm\trained_models\IgLM-S"
-```
-
----
-
-## 🎯 Optimize CDR Loops with RL
-
-This example fine-tunes **IgLM** on **HCDR3** for a β-sheet objective using **online RL (PPO)** and shows the **offline RL (DRO)** variant too.
-
-### 1) Generate configs from templates
-
-Templates live in `configs/examples/*_template.json`. Use the helper to substitute the IgLM path and write the non-template files (same name without `"template"`):
-
-```bash
-# From repo root; uses ./configs/examples by default
+export IGLM_DIR=/absolute/path/to/IgLM/iglm/trained_models/IgLM-S
 python configs/examples/patch_iglm_dir.py --value "${IGLM_DIR}"
-# (Add --recursive if you’ve nested templates)
+python -m protein_tune_rl.tune \
+  --config-file configs/examples/a2c_iglm_hcdr3_beta_sheet.json
 ```
 
-This produces (examples):
+Use the corresponding `ppo`, `reinforce`, or `explicit_kl_reinforce` config to
+select another online method. Folding-based rewards additionally need the
+optional `folding` extra and the relevant IgFold dependencies. Composition
+rewards and ESM/PDB evaluator tests do not require IgFold.
 
-* `configs/examples/ppo_iglm_hcdr3_beta_sheet.json`
-* `configs/examples/dro_iglm_hcdr3_beta_sheet.json`
+**CPU caveat:** optimizer tests support CPU, but training checkpoint save/resume
+still assumes CUDA RNG state. CPU training is not currently end-to-end
+checkpoint-safe; see [upstream issue #4](https://github.com/llnl/protein_tune_rl/issues/4).
 
-> Open the generated file(s) to confirm `dataset.data_directory`, `experiment_directory`, and any task-specific settings match your setup.
+## Independent evaluation
 
-### 2) Run Online RL (PPO)
+ESM-2 scores sequence compatibility with a frozen model, not experimental affinity:
 
 ```bash
-python protein_tune_rl/tune.py \
-  --config-file configs/examples/ppo_iglm_hcdr3_beta_sheet.json
+python scripts/evaluate_esm.py \
+  data/examples/eval_data_50_v3.csv results/esm2_eval.csv \
+  --device cpu --limit 5
 ```
 
-### 3) Run Offline RL with Single Trajectory Dataset (DRO)
+The first run may download the model. Add `--local-files-only` for cached weights;
+use `--device cuda` when appropriate. Mean/sum reduction and region-only scoring
+are also exposed by `ESMSequenceScoring` through the metric factory.
+
+For a matched reference and predicted structure:
 
 ```bash
-python protein_tune_rl/tune.py \
-  --config-file configs/examples/dro_iglm_hcdr3_beta_sheet.json
+python scripts/compare_pdb_structures.py reference.pdb predicted.pdb \
+  --reference-region 95:107 --predicted-region 95:107 \
+  --reference-chain H --predicted-chain H --output comparison.json
 ```
 
-### 4) Run Offline RL with Preference Dataset (DPO)
+Bounds are one-based inclusive sequence positions, not PDB residue identifiers.
+See [ESM/PDB usage and interpretation](docs/ESM_PDB_EVALUATION.md).
+
+## Validation
 
 ```bash
-python protein_tune_rl/tune.py \
-  --config-file configs/examples/dpo_iglm_hcdr3_beta_sheet.json
+python -m pytest tests -q
 ```
 
-**Notes**
+The suite contains **17 tests**, using synthetic tensors, fake ESM models,
+synthetic PDBs, and a tiny randomly initialised GPT-2. It requires neither IgLM
+weights nor a GPU. The CPU/Gloo integration tests need permission to open a local
+rendezvous socket; restrictive sandboxes can block their setup.
 
-* Both configs expect `tokenizer.tokenizer_config` and `policy_model.dir` to point to the same IgLM weights directory you set in `IGLM_DIR`.
-* If you prefer a different output location, edit `experiment_directory` in the generated config.
+The previously recorded five-sequence cached ESM-2 GPU smoke test took 9.5 seconds,
+with mean whole-chain log probability −2.367 and HCDR3 log probability −3.051.
+These are implementation smoke-test results, not trained-policy benchmarks.
+See [project status](PROJECT_STATUS.md) for validation scope and pending work.
 
----
+## Research report and figures
 
-## 🛠 Development
+- [Report source](paper/main.tex) and [report PDF](paper/ProteinTuneRL_A_Reinforcement_Learning_Perspective_on_Antibody_Design.pdf).
+- [Figure reproduction script](paper/make_plots.py), using retained local run logs.
+- [Project article](https://medium.com/@ruman_shaikh/proteintunerl-a-reinforcement-learning-perspective-on-antibody-design-7d6e4d2a5a35).
 
-```bash
-pip install -e '.[dev]'
-black -S -t py39 protein_tune_rl
-flake8 --ignore=E501,E203,W503 protein_tune_rl
-isort protein_tune_rl
-```
+Existing figures describe individual historical runs, not multi-seed evidence that
+one algorithm produces better antibodies. Run settings differ across methods.
+Historical plots/report claims should not be assumed to describe every later
+correctness fix or the current logging semantics.
 
----
+| PPO | A2C + GAE |
+| --- | --- |
+| ![PPO historical reward and KL curves](plots/ppo.png) | ![A2C historical reward and KL curves](plots/a2c.png) |
 
-## 📚 Citation
+| REINFORCE | Explicit-KL REINFORCE |
+| --- | --- |
+| ![REINFORCE historical reward and KL curves](plots/reinforce.png) | ![Explicit-KL REINFORCE historical reward and KL curves](plots/explecit_kl.png) |
 
-If you use **ProteinTuneRL** in your work, please cite [this paper](https://www.biorxiv.org/content/10.1101/2025.08.08.669419v1) as follows:
+## Limits and preserved research data
 
-```bibtex
-@article{Lee2025.08.08.669419,
-  author = {Lee, Chak Shing and Hayes, Conor F. and Vashchenko, Denis and Landajuela, Mikel},
-  title = {Reinforcement Learning for Antibody Sequence Infilling},
-  journal = {bioRxiv},
-  year = {2025},
-  elocation-id = {2025.08.08.669419},
-  doi = {10.1101/2025.08.08.669419},
-  publisher = {Cold Spring Harbor Laboratory},
-  url = {https://www.biorxiv.org/content/early/2025/08/12/2025.08.08.669419},
-  eprint = {https://www.biorxiv.org/content/early/2025/08/12/2025.08.08.669419.full.pdf}
-}
-```
+- `ss_perc_sheet` is Biopython's amino-acid-composition statistic, **not a structure prediction**. Region-only scoring requires recalibrated normalisation.
+- The online trainer supports one reward metric per run; multi-objective reward composition remains future work.
+- Stop-token credit and empty-action/multi-rank advantage-normalisation boundaries need review; current tests are not exhaustive distributed validation.
+- Folding-metric default options and retry cleanup still have edge cases; fallback handling does not cover every failure path.
+- Region RMSD is undefined for unequal loop lengths. B-factor is pLDDT only when the structure producer uses that field for pLDDT.
+- Bundled data have no antigen complexes or experimental affinity labels and cannot supply docking ground truth. External matched structures are needed.
+- Imperial HPC access has ended; cluster scaffolding was removed. **Research data, logs, checkpoints, figures, and reports are retained.**
 
----
+`test_run/` outputs and `IgLM/` model weights are intentionally ignored by Git and
+are **not backed up by a push**. Paper source, final report, figures, and plotting
+scripts are versioned; LaTeX auxiliary build records stay local.
 
-## 📄 License
+## Public upstream contributions
 
-This project is released under the **MIT License**. See [LICENSE](LICENSE) for the full text.  
-**SPDX-License-Identifier:** MIT  
-**LLNL-CODE-2006374**
+Six issues were submitted to LLNL under `ruman-shaikh`. These are **bug reports
+and feature proposals, not merged PRs**:
 
-**Notes**
-- **Third-party dependencies and models** (e.g., **IgLM**) are distributed under their **own licenses**. Please review the upstream repositories for terms before use.
-- **Contributions** are accepted under the MIT license; by submitting a PR, you agree your changes may be redistributed under the project’s license.
+1. [Adaptive KL controller normalisation and scalar coefficient](https://github.com/llnl/protein_tune_rl/issues/1)
+2. [Sampling/PPO/reference probability-support consistency](https://github.com/llnl/protein_tune_rl/issues/2)
+3. [Prompt-only PPO learned baseline](https://github.com/llnl/protein_tune_rl/issues/3)
+4. [CPU checkpoint save/restore](https://github.com/llnl/protein_tune_rl/issues/4)
+5. [Optional ESM-2 evaluator](https://github.com/llnl/protein_tune_rl/issues/5)
+6. [Token-level A2C with GAE](https://github.com/llnl/protein_tune_rl/issues/6)
+
+## Attribution and licence
+
+Original framework: LLNL and contributors. Original paper: Lee, Hayes,
+Vashchenko, and Landajuela, *Reinforcement Learning for Antibody Sequence Infilling*
+(2025), [doi:10.1101/2025.08.08.669419](https://doi.org/10.1101/2025.08.08.669419).
+The full upstream citation is preserved in [README.upstream.md](README.upstream.md).
+
+[MIT licence](LICENSE), [NOTICE](NOTICE), LLNL-CODE-2006374. Third-party model
+weights and dependencies retain their own licences.
