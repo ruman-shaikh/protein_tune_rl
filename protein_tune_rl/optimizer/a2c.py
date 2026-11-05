@@ -3,6 +3,7 @@ from typing import Optional
 
 import torch
 from torch import nn
+from torch.distributions.categorical import Categorical
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 from transformers.modeling_outputs import CausalLMOutput
@@ -48,6 +49,7 @@ class A2C:
         gae_lambda: float = 0.95,
         normalize_advantage: bool = False,
         max_grad_norm: Optional[float] = None,
+        constrained_ids=None,
     ):
         self.entropy_weight = entropy_weight
         self.value_loss_weight = value_loss_weight
@@ -59,16 +61,23 @@ class A2C:
         self.policy = policy
         self.policy_optimizer = Adam(policy.parameters(), lr=learning_rate, eps=1e-5)
 
-        if torch.cuda.is_available():
-            self.device = torch.cuda.current_device()
-        else:
-            self.device = "cpu"
+        # Follow the supplied policy placement. CUDA availability alone is not
+        # sufficient because callers may deliberately construct a CPU policy.
+        self.device = next(policy.parameters()).device
+
+        # Token ids masked to -inf during sampling; the on-policy log-probs and
+        # entropy must be computed over the same constrained support.
+        self.constrained_ids = (
+            None
+            if constrained_ids is None
+            else torch.as_tensor(constrained_ids, dtype=torch.long, device=self.device)
+        )
 
         state_value = TokenValue(policy, "value_function")
         state_value.eval()
         state_value.to(self.device)
-        if torch.cuda.is_available():
-            self.state_value = DDP(state_value, device_ids=[self.device])
+        if self.device.type == "cuda":
+            self.state_value = DDP(state_value, device_ids=[self.device.index])
         else:
             self.state_value = DDP(state_value)
 
@@ -76,17 +85,24 @@ class A2C:
             self.state_value.parameters(), lr=learning_rate, eps=1e-5
         )
 
-    def _compute_gae(self, rewards, values, mask):
+    def _compute_gae(self, rewards, values, mask, last_values=None, truncated=None):
         batch_size, steps = rewards.size()
         advantages = torch.zeros_like(rewards)
         gae = torch.zeros(batch_size, device=rewards.device)
 
-        values_pad = torch.cat(
-            [values, torch.zeros((batch_size, 1), device=values.device)], dim=1
-        )
-        mask_pad = torch.cat(
-            [mask, torch.zeros((batch_size, 1), device=mask.device)], dim=1
-        )
+        # Bootstrap column appended after the last step. Episodes that were cut
+        # off by max_length (truncated) continue past their last token, so we
+        # bootstrap with V(s_T); episodes that emitted the stop token are true
+        # terminals and get a zero (no bootstrap).
+        if truncated is None or last_values is None:
+            boot_val = torch.zeros(batch_size, device=values.device)
+            boot_mask = torch.zeros(batch_size, device=mask.device)
+        else:
+            boot_mask = truncated.to(mask.dtype)
+            boot_val = last_values.to(values.dtype)
+
+        values_pad = torch.cat([values, boot_val[:, None]], dim=1)
+        mask_pad = torch.cat([mask, boot_mask[:, None]], dim=1)
 
         for t in reversed(range(steps)):
             next_mask = mask_pad[:, t + 1]
@@ -127,22 +143,37 @@ class A2C:
 
         model_out = self.policy(**state)
         logits = model_out.logits[:, init_size - 1 : -1, :]
-        log_probs = torch.log_softmax(logits, dim=-1)
-        step_logp = torch.gather(
-            log_probs, dim=-1, index=action.unsqueeze(2)
-        ).squeeze(2)
-        step_entropy = -(log_probs * torch.exp(log_probs)).sum(-1)
+        if self.constrained_ids is not None:
+            logits = logits.index_fill(-1, self.constrained_ids, float("-inf"))
+        # Categorical is used (rather than a manual gather) so entropy stays
+        # NaN-safe when the constrained logits are -inf.
+        policy_dist = Categorical(logits=logits)
+        step_logp = policy_dist.log_prob(action)
+        step_entropy = policy_dist.entropy()
 
         action_mask_float = action_mask.to(step_logp.dtype)
         step_logp = step_logp * action_mask_float
         step_entropy = step_entropy * action_mask_float
 
-        values = self.state_value(**state)
-        values = values[:, init_size - 1 : -1] * action_mask_float
+        full_values = self.state_value(**state)
+        # V(s_T): value of the state after the final generated token, used only
+        # to bootstrap truncated episodes.
+        last_values = full_values[:, -1].detach()
+        values = full_values[:, init_size - 1 : -1] * action_mask_float
+
+        truncated = batch.get("truncated")
+        if truncated is not None:
+            truncated = truncated.to(self.device)
 
         rewards = self._build_step_rewards(reward, action_mask, values)
         values_detached = values.detach()
-        advantages = self._compute_gae(rewards, values_detached, action_mask_float)
+        advantages = self._compute_gae(
+            rewards,
+            values_detached,
+            action_mask_float,
+            last_values=last_values,
+            truncated=truncated,
+        )
 
         if self.normalize_adv:
             valid_adv = advantages[action_mask]

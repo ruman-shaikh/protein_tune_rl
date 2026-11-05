@@ -18,8 +18,12 @@ class FoldingConfidence(StructureBasedMetric):
         name = f"fold{str(self.count)}"
         output_pdb_file, out = self._fold(chains, name)
 
-        os.remove(output_pdb_file)
-        os.remove(self.workspace + name + ".fasta")
+        self._safe_remove(output_pdb_file)
+        self._safe_remove(self.workspace + name + ".fasta")
+
+        if out is None:
+            # Folding failed after retries; return the (bad) fallback score.
+            return (self.fail_value - self.mean) / self.std
 
         # prmsd: Predicted RMSD for each residue's N, CA, C, CB atoms (dim: 1, L, 4)
         res_rmsd = out.prmsd.square().mean(dim=-1).sqrt().squeeze(0)

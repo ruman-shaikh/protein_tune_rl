@@ -50,27 +50,37 @@ class PPO:
         entropy_weight: float = 5e-3,
         baseline: str = "mean",
         normalize_advantage: bool = False,
+        max_grad_norm=None,
+        constrained_ids=None,
     ):
         self.clip = clip
         self.minibatch_size = minibatch_size
         self.entropy_weight = entropy_weight
         self.baseline = baseline
         self.normalize_adv = normalize_advantage
+        self.max_grad_norm = max_grad_norm
 
         self.policy = policy
         self.policy_optimizer = Adam(policy.parameters(), lr=learning_rate, eps=1e-5)
 
-        if torch.cuda.is_available():
-            self.device = torch.cuda.current_device()
-        else:
-            self.device = "cpu"
+        # Follow the supplied policy placement. CUDA availability alone is not
+        # sufficient because callers may deliberately construct a CPU policy.
+        self.device = next(policy.parameters()).device
+
+        # Token ids masked to -inf during sampling; the on-policy ratio must be
+        # computed over the same constrained support.
+        self.constrained_ids = (
+            None
+            if constrained_ids is None
+            else torch.as_tensor(constrained_ids, dtype=torch.long, device=self.device)
+        )
 
         if baseline == "state_value":
             state_value = StateValue(policy, "value_function")
             state_value.eval()
             state_value.to(self.device)
-            if torch.cuda.is_available():
-                self.state_value = DDP(state_value, device_ids=[self.device])
+            if self.device.type == "cuda":
+                self.state_value = DDP(state_value, device_ids=[self.device.index])
             else:
                 self.state_value = DDP(state_value)
 
@@ -79,7 +89,7 @@ class PPO:
             )
 
     def _compute_clip_loss(self, adv, old_logp, state, action):
-        logp = compute_logp(self.policy, state, action)
+        logp = compute_logp(self.policy, state, action, self.constrained_ids)
         ratios = torch.exp(logp - old_logp)
 
         surr1 = ratios * adv
@@ -87,7 +97,7 @@ class PPO:
 
         return -torch.min(surr1, surr2).mean()
 
-    def _minibatch_step(self, reward, adv, old_logp, state, action):
+    def _minibatch_step(self, reward, adv, old_logp, state, action, prompt_state):
         if self.normalize_adv:
             adv = normalize_across_processes(adv)
 
@@ -96,13 +106,22 @@ class PPO:
             self.value_optimizer.zero_grad()
 
         policy_loss = self._compute_clip_loss(adv, old_logp, state, action)
-        policy_loss.backward(retain_graph=True)
+        policy_loss.backward()
+        if self.max_grad_norm is not None:
+            nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
         self.policy_optimizer.step()
 
         if self.baseline == "state_value":
-            value = self.state_value(**state)
+            # Value is a function of the prompt only; conditioning it on the
+            # generated action would leak the action into the baseline and bias
+            # the policy gradient.
+            value = self.state_value(**prompt_state)
             value_loss = nn.MSELoss()(value, reward)
             value_loss.backward()
+            if self.max_grad_norm is not None:
+                nn.utils.clip_grad_norm_(
+                    self.state_value.parameters(), self.max_grad_norm
+                )
             self.value_optimizer.step()
 
     def step(self, reward, baseline, logp, entropy, batch):
@@ -113,6 +132,8 @@ class PPO:
             "attention_mask": batch["attention_mask"].to(self.device),
             "position_ids": batch["position_ids"].to(self.device),
         }
+        # Prompt-only view of the state (drop the generated action tokens).
+        prompt_state = {key: val[:, :init_size] for key, val in state.items()}
 
         old_logp = logp.detach()
 
@@ -120,7 +141,7 @@ class PPO:
             r_mean = compute_mean_across_processes(reward)
             adv = reward - r_mean
         elif self.baseline == "state_value":
-            value = self.state_value(**state)
+            value = self.state_value(**prompt_state)
             adv = reward - value.detach()
 
         if len(logp) % self.minibatch_size != 0:
@@ -133,6 +154,12 @@ class PPO:
             idx = shuffled_idx[start:end]
 
             mini_state = {key: val[idx] for key, val in state.items()}
+            mini_prompt = {key: val[idx] for key, val in prompt_state.items()}
             self._minibatch_step(
-                reward[idx], adv[idx], old_logp[idx], mini_state, action[idx]
+                reward[idx],
+                adv[idx],
+                old_logp[idx],
+                mini_state,
+                action[idx],
+                mini_prompt,
             )

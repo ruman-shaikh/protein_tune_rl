@@ -1,7 +1,5 @@
 import torch
-import torch.nn.functional as F  # (we'll use it later for a numerically-stable loss)
-
-torch.autograd.set_detect_anomaly(True)
+import torch.nn.functional as F
 
 
 def _pad_to_len(x: torch.Tensor, target_len: int, pad_id: int = 0) -> torch.Tensor:

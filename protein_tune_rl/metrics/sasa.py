@@ -24,13 +24,19 @@ class SASA(StructureBasedMetric):
 
     def __call__(self, chains: Dict):
         name = f"fold{str(self.count)}"
-        output_pdb_file, _ = self._fold(chains, name)
+        output_pdb_file, out = self._fold(chains, name)
+
+        if out is None or not os.path.exists(output_pdb_file):
+            # Folding failed after retries; return the fallback score.
+            self._safe_remove(output_pdb_file)
+            self._safe_remove(self.workspace + name + ".fasta")
+            return (self.fail_value - self.mean) / self.std
 
         struct = self.parser.get_structure(name, output_pdb_file)
         self.sr.compute(struct, level="S")
 
-        os.remove(output_pdb_file)
-        os.remove(self.workspace + name + ".fasta")
+        self._safe_remove(output_pdb_file)
+        self._safe_remove(self.workspace + name + ".fasta")
 
         return (struct.sasa - self.mean) / self.std
 

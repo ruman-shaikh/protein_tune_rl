@@ -15,6 +15,7 @@ class StructureBasedMetric:
         options: Dict = None,
         mean: float = 0.0,
         std: float = 1.0,
+        fail_value: float = 0.0,
     ):
         if options is None:
             options = {}
@@ -23,6 +24,9 @@ class StructureBasedMetric:
 
         self.mean = mean
         self.std = std
+        # Raw (pre-normalization) score returned when folding fails, so a single
+        # unfoldable sample does not crash the run.
+        self.fail_value = fail_value
 
         if options["do_refine"] and not options["use_openmm"]:
             from igfold.refine.pyrosetta_ref import init_pyrosetta
@@ -48,6 +52,13 @@ class StructureBasedMetric:
         os.makedirs(self.workspace, exist_ok=True)
 
         self.count = 0
+
+    @staticmethod
+    def _safe_remove(path):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     def _fold(self, chains: Dict, name: str):
         num_tries = 0

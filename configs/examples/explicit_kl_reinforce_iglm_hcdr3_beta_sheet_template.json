@@ -23,7 +23,8 @@
     },
     "policy_model": {
         "name": "iglm",
-        "dir": "${IGLM_DIR}"
+        "dir": "${IGLM_DIR}",
+        "attn_implementation": "sdpa"
     },
     "KL_penalty": {
         "weight": 0.02,

@@ -1,3 +1,4 @@
+import time
 from functools import cached_property
 
 import pandas as pd
@@ -19,13 +20,21 @@ from protein_tune_rl.util.util import compute_logp
 
 
 class KLPenalty:
-    def __init__(self, ref_model, weight, target, device=None):
+    def __init__(self, ref_model, weight, target, device=None, constrained_ids=None):
         self.ref_model = ref_model
         self.beta = weight
         self.K_b = 0.1
         self.target = target
 
         self.device = torch.device("cpu") if device is None else device
+        # Match the sampler's support: logp is normalized over the constrained
+        # vocabulary, so ref_logp must be too, otherwise the KL estimate mixes
+        # two different measures.
+        self.constrained_ids = (
+            None
+            if constrained_ids is None
+            else torch.as_tensor(constrained_ids, dtype=torch.long, device=self.device)
+        )
 
     def __call__(self, logp, sequences):
         init_size = sequences["init_size"]
@@ -38,14 +47,21 @@ class KLPenalty:
         action = state["input_ids"][:, init_size:].detach()
 
         with torch.no_grad():
-            ref_logp = compute_logp(self.ref_model, state, action)
+            ref_logp = compute_logp(
+                self.ref_model, state, action, self.constrained_ids
+            )
         KL = logp.detach() - ref_logp
 
-        # section 2.2 of https://arxiv.org/pdf/1909.08593
+        # Adaptive KL controller, section 2.2 of https://arxiv.org/pdf/1909.08593.
+        # Update beta once per batch from the (cross-process) mean KL so it stays
+        # a scalar and stays identical across DDP ranks.
         if self.target is not None:
-            rel_KL = KL - self.target / self.target
-            e_t = torch.clamp(rel_KL, -0.2, 0.2)
-            self.beta = self.beta * (1 + self.K_b * e_t)
+            mean_KL = KL.mean()
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(mean_KL, dist.ReduceOp.SUM)
+                mean_KL = mean_KL / dist.get_world_size()
+            e_t = torch.clamp((mean_KL - self.target) / self.target, -0.2, 0.2)
+            self.beta = self.beta * (1 + self.K_b * e_t.item())
 
         return -self.beta * KL
 
@@ -196,6 +212,10 @@ class OnlineRLSampler:
         init_sequences["input_ids"] = model_input["input_ids"]
         init_sequences["attention_mask"] = model_input["attention_mask"]
         init_sequences["position_ids"] = model_input["position_ids"]
+        # Sequences that never emitted the stop token were cut off by
+        # max_length; downstream credit assignment bootstraps these instead of
+        # treating them as true terminals.
+        init_sequences["truncated"] = ~finished
 
         if logp_steps:
             logp_steps = torch.stack(logp_steps, dim=1)
@@ -231,7 +251,10 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
             self.ref_model.eval()
             self.ref_model = DDP(self.ref_model, device_ids=self.device_ids)
             self.KL_penalty = KLPenalty(
-                self.ref_model, **config["KL_penalty"], device=self.device
+                self.ref_model,
+                **config["KL_penalty"],
+                device=self.device,
+                constrained_ids=self._constrained_ids,
             )
 
         self.opt_name = config["optimizer"].pop("name")
@@ -245,6 +268,7 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
         self.optimizer = create_optimizer(
             name=self.opt_name,
             model=self.policy,
+            constrained_ids=self._constrained_ids,
             **config["optimizer"],
         )
         self.policy_optimizer = self.optimizer.policy_optimizer
@@ -263,7 +287,14 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
 
         log_df = pd.DataFrame()
         current_step = 0
+        epoch = 0
+        start_time = time.time()
+        start_step = self.ckpt["step"] if self.ckpt else 0
         while current_step < self.total_optimization_steps:
+            # Reshuffle each epoch; without this DistributedSampler replays the
+            # same order every pass.
+            if hasattr(self.dataloader.sampler, "set_epoch"):
+                self.dataloader.sampler.set_epoch(epoch)
             for batch_number, batch in enumerate(iter(self.dataloader)):
                 if self.ckpt and current_step < self.ckpt["step"]:
                     current_step += 1
@@ -284,7 +315,12 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
 
                 reward = torch.zeros(len(sampled_seqs))
                 for i, seq in enumerate(sampled_seqs):
-                    chains = {"L": batch["LC"][i], "H": seq}
+                    chains = {
+                        "L": batch["LC"][i],
+                        "H": seq,
+                        "seq_pre_mask": tokenized_batch["seq_pre_mask"][i],
+                        "seq_post_mask": tokenized_batch["seq_post_mask"][i],
+                    }
                     reward[i] = self.metric(chains)
                 reward = reward.to(logp.device)
 
@@ -300,12 +336,32 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
                     KL_mean /= dist.get_world_size()
                     logger.info(f"step: {current_step}, KL mean: {KL_mean}")
 
-                self.optimizer.step(reward, reward_mean, logp, entropy, tokenized_batch)
+                # Baseline must reflect the reward actually optimized (incl. the
+                # KL penalty); reward_mean above is the task reward, kept for logs.
+                baseline = reward.mean()
+                dist.all_reduce(baseline, dist.ReduceOp.SUM)
+                baseline /= dist.get_world_size()
+
+                self.optimizer.step(reward, baseline, logp, entropy, tokenized_batch)
 
                 reward_mean = reward_mean.cpu().numpy()
                 logger.info(f"step: {current_step}, reward mean: {reward_mean}")
 
                 current_step += 1
+
+                # Progress + ETA line (rank 0 only, every 500 steps).
+                steps_done = current_step - start_step
+                if steps_done > 0 and current_step % 500 == 0:
+                    elapsed = time.time() - start_time
+                    sps = steps_done / max(elapsed, 1e-9)
+                    remaining = self.total_optimization_steps - current_step
+                    eta_h = (remaining / sps / 3600) if sps > 0 else float("inf")
+                    pct = 100.0 * current_step / self.total_optimization_steps
+                    logger.info(
+                        f"progress: step {current_step}/"
+                        f"{self.total_optimization_steps} ({pct:.1f}%), "
+                        f"{sps:.2f} steps/s, ETA {eta_h:.2f}h"
+                    )
 
                 if current_step % self.check_point_freq == 0:
                     self._save_checkpoint(exp_output_dir, self.opt_name, current_step)
@@ -315,6 +371,7 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
                         {
                             "num_samples": [current_step * batch_size],
                             "reward_mean": [reward_mean],
+                            "elapsed_s": [time.time() - start_time],
                         }
                     )
 
@@ -328,6 +385,8 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
 
                 if current_step >= self.total_optimization_steps:
                     break
+
+            epoch += 1
 
         if current_step % self.check_point_freq:
             self._save_checkpoint(exp_output_dir, self.opt_name, current_step)

@@ -2,8 +2,6 @@ import torch
 
 from protein_tune_rl import logger
 
-torch.set_default_dtype(torch.float32)
-
 
 class DRO:
     def __init__(

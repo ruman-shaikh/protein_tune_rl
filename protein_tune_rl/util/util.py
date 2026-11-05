@@ -56,10 +56,15 @@ def gather_dataframes(local_df, device, group=None):
     return None
 
 
-def compute_logp(model, state, action):
+def compute_logp(model, state, action, constrained_ids=None):
     model_out = model(**state)
 
     logits = model_out.logits[:, -action.shape[-1] - 1 : -1, :]
+    # Match the sampling distribution: the sampler masks these token ids to
+    # -inf before sampling, so the on-policy log-probs must be renormalized
+    # over the same constrained support (see OnlineRLSampler._constrained_ids).
+    if constrained_ids is not None:
+        logits = logits.index_fill(-1, constrained_ids, float("-inf"))
     logp_mask = state["attention_mask"][:, -action.shape[-1] - 1 : -1]
 
     all_logps = torch.log_softmax(logits, dim=-1)
