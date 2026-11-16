@@ -64,18 +64,50 @@ install with biopython <1.82 silently optimises a different property while every
 label still says sheet. Installed here: 1.86. Stored CSV values match the
 post-1.82 convention. **Pin biopython >=1.82.**
 
-## 2. Paper direction
+## 2. Paper direction — main venue (revised 16 Nov 2026)
 
-*The β-sheet endpoint used in published antibody-infilling RL is satisfiable by
-length-capped composition padding; the trained policy converges on exactly that;
-and none of the standard guardrails — proxy reward, masked-PLL plausibility,
-sequence-diversity metrics — detect it. Only structural evaluation adjudicates.*
+**Target: a research paper, not a workshop note.** Benchmark/evaluation track
+(NeurIPS Datasets & Benchmarks) or a computational-biology journal
+(Bioinformatics, PLOS Computational Biology).
 
-Second, independent contribution: the published PPO baseline was mis-implemented
-(§C6).
+*In-silico endpoints for antibody sequence RL are systematically exploitable.
+We characterise a set of endpoints under optimisation pressure, show that the
+standard guardrails — masked-PLL plausibility scoring and sequence-diversity
+metrics — fail to detect the failure, and provide a diagnostic that does.*
 
-Scope discipline: no binding, affinity, developability or therapeutic claims.
-The bundled data have no antigens, complexes or affinity labels.
+Three contributions:
+
+1. **An attackability characterisation** of the in-silico endpoints this
+   literature actually uses: compositional β-sheet, SASA, IgFold confidence,
+   DSSP β-strand, ESM-2 masked PLL. Which survive optimisation pressure, which
+   do not, and by what mechanism.
+2. **A demonstration that the standard guardrails fail together**, which is the
+   part the field has no statement of. Plausibility scoring is co-exploitable;
+   diversity metrics stay healthy throughout.
+3. **A gaming detector** that needs no held-out oracle, built from the
+   degeneracy signatures measured here: generation length pinning at the
+   sampler cap, composition concentration into a small residue set, and reward
+   saturation while an independent oracle diverges.
+
+The β-sheet case stops being the thesis and becomes the worked example. That
+also answers the strongest reviewer objection — "you attacked an obviously bad
+reward" — because the claim is about the *class* of cheap endpoints.
+
+Secondary contribution, methods appendix: the upstream PPO importance ratio is
+wrong by ~29% (§C6). It also establishes that the baselines here are sound.
+
+**Why this framing and not "better antibodies."** The bundled data have no
+antigens, no complexes and no affinity or expression labels, and there is no
+wet lab. No functional claim is available from this project at any effort
+level. Benchmark and diagnostic contributions are the categories that do not
+require functional validation, so they are the only routes to a research-level
+venue here. Binding claims would need external data (SAbDab complexes, or a
+public affinity dataset for offline DRO) and are a separate project.
+
+**Hardware is not the constraint.** IgLM-S is 1.4M parameters; measured
+throughput is 81 sequences/s and folding is ~1.5 s/structure, both on a 6 GB
+laptop GPU at a fraction of capacity. Only ESMFold/AlphaFold-class models are
+out of reach.
 
 ## 3. What is still unmeasured
 
@@ -185,13 +217,59 @@ present in the output CSV.
 
 **Artifact:** `results/c3_structure.csv`. **Safe to shut down between batches.**
 
-### C4 — Multi-seed training matrix (1–2 days unattended, offline, GPU)
+### C4 — Endpoint attackability screen (½ day, offline) **[RESTRUCTURED]**
 
-The first publishable evidence. 5 seeds × {REINFORCE, PPO (fixed), A2C} × 3 KL
-weights, 2,000 steps, batch 8 — about 45 runs. Measured throughput is 81 seq/s,
-so each run is minutes to tens of minutes; the matrix is roughly a long day
-unattended. **Time 20 real training steps first** and extrapolate before
-launching the full matrix.
+The gate that must precede the expensive training. Before committing 6–7 GPU
+hours per run to any endpoint, establish whether that endpoint can be moved by
+trivially degenerate edits — the same discipline that made U1 worth running.
+
+Eight hand-written HCDR3 attacks (`polyV_max`, `polyG_max`, `polyW_max`,
+`polyP_max`, `VY_repeat`, `minimal`, `anchored_V`, vs `native`) scored against
+every candidate endpoint, reported as gain in **native standard deviations**.
+
+Split into two scripts with no dependency between them, so they run
+concurrently (measured: 1.3 GB combined on a 6 GB card):
+
+- `c4a_structural_attackability.py` — one IgFold call per (context, attack)
+  yields SASA, IgFold confidence and DSSP β-strand together, plus the
+  compositional endpoints on identical sequences.
+- `c4b_esm_attackability.py` — ESM-2 masked PLL as a *reward*, at two scopes
+  and two model sizes, to separate exploitability from model capacity.
+
+Both resumable: one appended row per completed item, skipping what is present.
+Tables join on `(context, attack)`.
+
+**Decision rule for C4b-prime (training):** only endpoints that resist the
+hand-written attacks are worth training against. An endpoint a constant string
+already maximises needs no RL run to condemn it.
+
+### C4-prime — Train against the surviving endpoints (the research core)
+
+For each endpoint that survives C4, run RL against it and measure whether
+optimisation finds an exploit the hand-written attacks missed. This is where
+the compute goes.
+
+Cost from measured rates: folding-based rewards cost ~1.5 s/sequence, so
+~12 s/step at batch 8 — about **6–7 h per 2,000-step run**, against ~15 min for
+the compositional reward. Budget 2–3 seeds per surviving endpoint;
+~50–80 GPU-hours total, which suits intermittent laptop use.
+
+Use the C4 §Resume recipe below. Report against **measured KL**, not step.
+
+### C4-resume — recipe for any long training run
+
+- set `"fixed_experiment_directory": true` so the output directory is stable
+  across restarts (otherwise `tune.py` appends a fresh timestamp)
+- set `"check_point_freq": 200`
+- to resume, add `"checkpoint": "<path to latest .ckpt>"` to the config
+- resume replays the dataloader to skip completed steps — fine at 2,000
+- single GPU only: resuming with a different world size now logs a warning
+  rather than raising, but RNG continuity is lost (C0)
+
+The old plan's 45-run matrix (5 seeds × 3 algorithms × 3 KL weights on the
+compositional reward) is **cut**. Under the main-venue framing the algorithm
+comparison is not the contribution; 3 seeds on the compositional reward is
+enough to establish the worked example, and the compute belongs in C4-prime.
 
 Resume recipe, because this is the one checkpoint that spans shutdowns:
 
@@ -256,10 +334,17 @@ Update and commit this table at every checkpoint boundary.
 | C1 | Lock composition attack, ESM-650M | **yes** | **network part DONE** 16 Nov; script promotion pending (offline) | 650M weights cached |
 | C2 | IgFold + DSSP setup | **yes** | **DONE** 16 Nov 2026 | `results/c2_smoke.csv`, `results/c2_versions.json` |
 | C3 | Structural measurement | no | **DONE** 16 Nov 2026 | `results/c3_structure.csv`, `results/c3_sequences.csv` |
-| C4 | Multi-seed matrix | no | not started | — |
-| C5 | Endpoint benchmark | no | not started | — |
-| C6 | PPO correctness | no | not started | — |
+| C4 | Endpoint attackability screen (restructured) | no | **DONE** 16 Nov 2026 | `results/c4a_*.csv`, `results/c4b_*.csv` |
+| C4′ | Train against surviving endpoints (research core) | no | blocked on C4 | — |
+| C5 | Endpoint benchmark table | no | blocked on C4′ | — |
+| C6 | PPO correctness | no | not started (independent — parallelisable) | — |
+| C6′ | Gaming detector | no | blocked on C4′ | — |
 | C7 | Figures and draft | no | not started | — |
+
+**Dependency graph** (for parallel scheduling): C4a ∥ C4b ∥ C6 are mutually
+independent. C4′ needs C4. C5 and C6′ need C4′. C7 needs everything.
+Measured concurrency headroom: C4a (IgFold, 0.44 GB) + C4b (ESM-650M, 3 GB)
+ran together at 1.3 GB peak on a 6 GB card.
 
 **Gate status from 16 Nov 2026:** P1 fired decisively. P2(a) fired (29%, promoted
 to a contribution). P2(b) dead (never executed). P3 removed by instruction.
@@ -382,3 +467,70 @@ anti-correlation plus the policy/one-liner equivalence, **not** "RL destroys
 Remaining caveats: single seed; one folding predictor (C5 or O4 should add a
 second); β-strand assignment depends on IgFold's loop placement, which is the
 least reliable part of any antibody structure prediction.
+
+### C4 completion notes (16 Nov 2026) — the endpoint taxonomy
+
+20 held-out contexts × 8 hand-written HCDR3 attacks, no training, no search.
+Reported as gain in **native standard deviations**; positive means the attack
+raises the endpoint. C4a (structural, 160 folds) and C4b (ESM, 320 scores) ran
+concurrently at 1.3 GB combined.
+
+| Endpoint | Best attack | Gain | Verdict |
+|---|---|---|---|
+| ESM-2 PLL, region, 650M | `VY_repeat` | **+6.58σ** | gameable (worst) |
+| composition β-sheet, region | `polyV`/`polyW`/`VY` | **+5.15σ** | gameable |
+| SASA (whole complex) | `polyP_max` | **+2.98σ** | gameable |
+| composition β-sheet, H+L | `polyV`/`polyW`/`VY` | **+2.36σ** | gameable |
+| ESM-2 PLL, whole chain, 650M | `VY_repeat` | +1.52σ | weakly gameable |
+| **IgFold confidence** | — | all attacks **negative** | **resistant** |
+| **DSSP β-strand, region** | — | all attacks **negative** | **resistant** |
+
+The split falls exactly on the cheap/structural line: every sequence-level
+endpoint is gameable by a hand-written constant; both coordinate-derived
+endpoints resist all eight attacks.
+
+Findings that matter for the paper:
+
+1. **The plausibility oracle is more gameable than the reward it checks** —
+   ESM-2 PLL at +6.58σ against the compositional reward's +2.36σ.
+2. **Three published endpoints, three distinct mechanisms.** β-sheet falls to
+   sheet-set residues; SASA falls to poly-proline (rigid extended residues
+   maximise exposed surface); ESM PLL falls to *any* homopolymer — poly-G and
+   poly-P raise it ~+5.8σ while *lowering* the β-sheet reward by −1.64σ. This
+   is what makes it a class result rather than one bad reward choice, and it
+   answers the strongest reviewer objection.
+3. **Model capacity halves the ESM exploit but does not remove it**: region PLL
+   gain falls from +13.3σ (8M) to +6.2σ (650M). Still six sigma.
+4. **`region_only` scoring is more gameable than whole-chain** (+5.15σ vs
+   +2.36σ). The repo offers region-only as the improvement, since it removes
+   framework dilution — but dilution was what limited the exploit.
+5. Internal consistency check passed: `polyV`, `polyW` and `VY_repeat` give
+   identical composition gains, as they must, the sheet set being VIYFWLT.
+
+**Decision for C4′:** only the two resistant endpoints are worth training
+against. "Resistant to eight hand-written attacks at n=20" is *not*
+"unexploitable by search", and closing that gap is the research question.
+
+### C4′a — make structural rewards trainable, and measure the real cost
+
+Prerequisite checkpoint, cheap, must precede C4′b:
+
+1. **Write a DSSP β-strand metric.** It does not exist — C4a computed it in a
+   standalone script. Needs a metric class (fold → pydssp → β-fraction over the
+   generated span), factory registration, and normalisation constants from
+   native data.
+2. **Smoke-test both structural rewards in the training loop.** C0 unblocked
+   construction, but no training run has ever called a structure metric. The
+   per-sample folding, 3-retry logic and `fail_value` fallback are untested
+   under training.
+3. **Measure seconds/step on an idle GPU.** C4a ran at 4.2 s/fold under
+   contention vs 1.5 s/fold clean — the difference between a 2,000-step run
+   taking ~7 h or ~18 h.
+4. **Verify terminate/resume explicitly**: run ~20 steps, kill the process,
+   resume from the checkpoint, confirm it continues. The step-skip in
+   `OnlineRLTrainer.run` sits *before* the collator and reward call, so a
+   resume advances the dataloader without re-folding — important, since
+   re-folding 14,400 structures to reach step 1,800 would cost ~6 h. Cheap,
+   but never tested with a structural reward.
+5. For folding rewards set `check_point_freq` to ~50, not 200: at ~12 s/step a
+   200-step gap is 40 minutes of exposure.
