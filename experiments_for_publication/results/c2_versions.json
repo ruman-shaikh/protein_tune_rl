@@ -1,0 +1,12 @@
+{
+  "igfold": "0.4.0",
+  "antiberty": "1.0.0",
+  "pytorch_lightning": "1.8.6",
+  "pydssp": "0.9.2",
+  "torch": "2.5.1+cu121",
+  "transformers": "4.46.3",
+  "biopython": "1.86",
+  "peak_gpu_mb_folding": 441,
+  "dssp": "pydssp (pure python; no system mkdssp, which needs sudo)",
+  "wandb_workaround": "stubbed; venv wandb 0.25.1 broken vs protobuf 7.36.0"
+}

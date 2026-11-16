@@ -253,8 +253,8 @@ Update and commit this table at every checkpoint boundary.
 | CP | Description | Network | Status | Artifact |
 |---|---|---|---|---|
 | C0 | Unblock the code | no | **DONE** 16 Nov 2026 | `tests/test_c0_fixes.py`, 23 tests pass |
-| C1 | Lock composition attack, ESM-650M | **yes** | not started | — |
-| C2 | IgFold + DSSP setup | **yes** | not started | — |
+| C1 | Lock composition attack, ESM-650M | **yes** | **network part DONE** 16 Nov; script promotion pending (offline) | 650M weights cached |
+| C2 | IgFold + DSSP setup | **yes** | **DONE** 16 Nov 2026 | `results/c2_smoke.csv`, `results/c2_versions.json` |
 | C3 | Structural measurement | no | not started | — |
 | C4 | Multi-seed matrix | no | not started | — |
 | C5 | Endpoint benchmark | no | not started | — |
@@ -290,3 +290,52 @@ All four fixes applied, plus the biopython pin. 23 tests pass (was 17).
 
 The new `test_compute_logp_mask_counts_actions_through_the_stop_token` pins the
 shifted-mask invariant. If it ever fails, fix the caller, not the test.
+
+### C1/C2 completion notes (16 Nov 2026) — ALL NETWORK WORK IS DONE
+
+Everything remaining in the plan runs offline.
+
+**ESM co-exploitability confirmed at 650M.** Region-only masked PLL:
+
+| Sequence | ESM-2 8M | ESM-2 650M |
+|---|---|---|
+| native CDR | −3.121 | −2.337 |
+| shuffled native | −3.332 | −3.667 |
+| uniform random (22) | −3.237 | −3.163 |
+| poly-V (22) | −0.313 | −0.246 |
+| poly-A (22) | −0.348 | −0.301 |
+| VY-repeat | −0.351 | −0.105 |
+
+Not a toy-model artifact. The 650M model is *more* discriminating — it
+penalises shuffled-native harder than the 8M does, which the 8M barely
+separates — and still rates `"V"*22` about 2.1 nats/residue more likely than
+the native CDR. Peak GPU 2,984 MB of 6,141.
+
+**Structural pipeline works, and the closing leg already points the right way.**
+IgFold 0.4.0 + AntiBERTy 1.0.0 + pydssp 0.9.2, folding at ~1.2–1.9 s/sequence,
+peak 441 MB. On context 0 (n=1, C3 does this properly):
+
+| Condition | HCDR3 β-strand fraction | whole-H |
+|---|---|---|
+| native (`ASLNWDWYFDF`) | **0.636** | 0.547 |
+| poly-V at max_length | **0.136** | 0.461 |
+| anchored | 0.318 | 0.492 |
+
+The edit that *maximises* the β-sheet reward **reduces predicted β-strand
+content about five-fold**. Reward and real β-strand move in opposite
+directions. At ~1.5 s/fold, C3's 200 folds is roughly 5 minutes.
+
+**Environment notes, carried forward:**
+
+- `igfold` installs additively — torch 2.5.1 and transformers 4.46.3 were
+  already satisfied and were **not** changed. Six new packages; reversible
+  with `pip uninstall`.
+- **This venv's `wandb` is broken independently of this work** (wandb 0.25.1
+  vs protobuf 7.36.0: its generated `_pb2` modules are incompatible, so
+  `import wandb` fails on its own). `pytorch_lightning` 1.8.6, which IgFold
+  imports, eagerly imports wandb. Scripts stub `wandb` in `sys.modules` before
+  importing igfold rather than upgrading a shared package. **If IgFold is ever
+  used as a training reward**, `metrics/structure.py` imports igfold at module
+  level, so either repair wandb or add a guarded stub there.
+- No system `mkdssp` (needs sudo). `pydssp` provides the DSSP algorithm in
+  pure Python and needs no system package.
