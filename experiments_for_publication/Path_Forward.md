@@ -534,3 +534,42 @@ Prerequisite checkpoint, cheap, must precede C4′b:
    but never tested with a structural reward.
 5. For folding rewards set `check_point_freq` to ~50, not 200: at ~12 s/step a
    200-step gap is 40 minutes of exposure.
+
+### C4′a completion notes (16 Nov 2026) — all four items done
+
+**1. DSSP metric written.** `metrics/dssp_beta.py`, `DSSPBetaStrand`,
+registered in the factory as `dssp_beta`. Folds with IgFold, assigns secondary
+structure with pydssp, returns the β-strand fraction over the generated span.
+Normalisation from C4a natives (region mean 0.419, std 0.108). Behaves
+correctly as a reward: **native +2.013, poly-V-22 −2.617** — it penalises
+exactly what the compositional reward rewards.
+
+**2. `structure.py` now self-heals the wandb import.** `_ensure_wandb_importable`
+installs a stub *only* if the installed wandb raises on import, leaving a
+working wandb untouched. Without this, every structure reward was unusable in
+training for an unrelated dependency fault. Scripts no longer need their own
+stub.
+
+**3. Measured cost: ~6 s/step** (78 s for 12 steps; 5.7 s between consecutive
+step logs), batch 8, one fold per sample, idle GPU. **Far cheaper than the
+7–18 h estimate: a 2,000-step run is ≈3.3 h.**
+
+| | per step | 2,000 steps |
+|---|---|---|
+| compositional reward | ~0.3 s | ~15 min |
+| **structural reward (measured)** | **~6 s** | **~3.3 h** |
+
+C4′b budget: 2 endpoints × 3 seeds × 3.3 h ≈ **20 GPU-hours**. Suits
+intermittent laptop use.
+
+**4. Terminate/resume verified bit-exact.** A fresh 12-step run and a run
+resumed from the step-4 checkpoint produced *identical* reward values at every
+shared step (step 4: −0.13346260786056519; step 5: 0.15311908721923828;
+step 11: −0.09035690128803253). RNG state, dataloader replay and optimiser
+state all survive a kill. With `check_point_freq: 50` at ~6 s/step, the
+exposure window is ~5 minutes.
+
+**Configs for C4′b** are in `configs/experiments/`:
+`a2c_iglm_hcdr3_dssp_beta.json` and
+`a2c_iglm_hcdr3_folding_confidence.json`, both with
+`fixed_experiment_directory: true` and `check_point_freq: 50`.

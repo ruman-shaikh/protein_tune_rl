@@ -1,11 +1,36 @@
+import importlib
 import os
+import sys
+import types
 from typing import Dict
 
 import torch
 import torch.distributed as dist
-from igfold import IgFoldRunner
 
-from protein_tune_rl.util.util import HidePrints, check_pdb
+
+def _ensure_wandb_importable():
+    """Install a stub only if the installed wandb is broken.
+
+    igfold imports pytorch_lightning, which eagerly imports wandb for its
+    WandbLogger. A wandb whose generated protobuf modules mismatch the
+    installed protobuf raises on import, which would make every structure
+    reward unusable for an unrelated reason. We leave a working wandb alone.
+    """
+    if "wandb" in sys.modules:
+        return
+    try:
+        importlib.import_module("wandb")
+    except Exception:
+        stub = types.ModuleType("wandb")
+        stub.__spec__ = None
+        sys.modules["wandb"] = stub
+
+
+_ensure_wandb_importable()
+
+from igfold import IgFoldRunner  # noqa: E402
+
+from protein_tune_rl.util.util import HidePrints, check_pdb  # noqa: E402
 
 
 class StructureBasedMetric:

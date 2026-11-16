@@ -52,6 +52,11 @@ def create_metric(name):
 
             return IgLMTokenwiseKLDivergence
 
+        if name == "dssp_beta":
+            from protein_tune_rl.metrics.dssp_beta import DSSPBetaStrand
+
+            return DSSPBetaStrand
+
         if name == "esm_scoring":
             from protein_tune_rl.metrics.esm_scoring import ESMSequenceScoring
 
