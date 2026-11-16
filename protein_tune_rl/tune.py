@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import warnings
@@ -45,6 +46,11 @@ class ProteinTuneRL:
     def _load_config(self, config_path):
         with open(config_path) as f:
             config = json.load(f)
+        # Snapshot before any consumer mutates the dict. Trainers pop keys
+        # during construction (OnlineRLTrainer pops optimizer.name), and
+        # _save_config runs afterwards, so saving the live dict produced a
+        # config.json that could not reproduce its own run.
+        self._config_snapshot = copy.deepcopy(config)
         logger.info(f"Loaded config file: {config_path}")
         return config
 
@@ -116,7 +122,7 @@ class ProteinTuneRL:
 
     def _save_config(self):
         with open(self.exp_output_dir / 'config.json', "w") as outfile:
-            json.dump(self.config, outfile)
+            json.dump(self._config_snapshot, outfile)
 
     def tune(self):
         logger.info("Starting ProteinTuneRL")

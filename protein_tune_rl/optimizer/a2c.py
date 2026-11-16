@@ -2,13 +2,12 @@ import copy
 from typing import Optional
 
 import torch
+import torch.distributed as dist
 from torch import nn
 from torch.distributions.categorical import Categorical
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
 from transformers.modeling_outputs import CausalLMOutput
-
-from protein_tune_rl.util.util import normalize_across_processes
 
 
 class TokenValue(nn.Module):
@@ -116,6 +115,45 @@ class A2C:
 
         return advantages
 
+    def _normalize_advantages(self, advantages, mask_bool):
+        """Count-weighted advantage normalization that is collective-safe.
+
+        Every rank must reach the all_reduce regardless of how many valid
+        actions it holds. The number of unmasked actions differs per rank (and
+        can be zero when every sampled sequence stops immediately), so a
+        rank-local early return desynchronizes the process group and hangs the
+        job. Pooling (count, sum, sum-of-squares) also makes the statistics
+        correct across ranks with unequal counts, which averaging per-rank
+        means and variances is not.
+        """
+        valid = advantages[mask_bool]
+        stats = torch.stack(
+            [
+                torch.tensor(float(valid.numel()), device=advantages.device),
+                valid.sum() if valid.numel() else torch.zeros((), device=advantages.device),
+                (valid**2).sum()
+                if valid.numel()
+                else torch.zeros((), device=advantages.device),
+            ]
+        )
+        if dist.is_available() and dist.is_initialized():
+            dist.all_reduce(stats, dist.ReduceOp.SUM)
+
+        count, total, sq_total = stats[0], stats[1], stats[2]
+        # count is the global total, so this branch is taken identically on
+        # every rank and cannot desynchronize.
+        if count < 2:
+            return advantages
+
+        mean = total / count
+        var = (sq_total / count) - mean**2
+        std = torch.sqrt(var.clamp(min=0.0))
+
+        out = advantages.clone()
+        if valid.numel():
+            out[mask_bool] = (valid - mean) / (std + 1e-10)
+        return out
+
     def _build_step_rewards(self, reward, action_mask, values_like):
         rewards = torch.zeros_like(values_like)
         lengths = action_mask.sum(1).long()
@@ -176,11 +214,7 @@ class A2C:
         )
 
         if self.normalize_adv:
-            valid_adv = advantages[action_mask]
-            if valid_adv.numel() > 0:
-                normalized = normalize_across_processes(valid_adv)
-                advantages = advantages.clone()
-                advantages[action_mask] = normalized
+            advantages = self._normalize_advantages(advantages, action_mask.bool())
 
         returns = advantages + values_detached
 

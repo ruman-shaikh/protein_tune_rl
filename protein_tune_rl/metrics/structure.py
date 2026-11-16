@@ -28,7 +28,10 @@ class StructureBasedMetric:
         # unfoldable sample does not crash the run.
         self.fail_value = fail_value
 
-        if options["do_refine"] and not options["use_openmm"]:
+        # Use .get(): both SASA and FoldingConfidence construct default option
+        # dicts that omit these keys, so indexing raised KeyError before any
+        # folding could happen.
+        if options.get("do_refine") and not options.get("use_openmm"):
             from igfold.refine.pyrosetta_ref import init_pyrosetta
 
             init_pyrosetta()

@@ -252,7 +252,7 @@ Update and commit this table at every checkpoint boundary.
 
 | CP | Description | Network | Status | Artifact |
 |---|---|---|---|---|
-| C0 | Unblock the code | no | not started | — |
+| C0 | Unblock the code | no | **DONE** 16 Nov 2026 | `tests/test_c0_fixes.py`, 23 tests pass |
 | C1 | Lock composition attack, ESM-650M | **yes** | not started | — |
 | C2 | IgFold + DSSP setup | **yes** | not started | — |
 | C3 | Structural measurement | no | not started | — |
@@ -267,5 +267,26 @@ P4 inverted — diversity does not collapse; diversity metrics fail to detect th
 pathology, which is a stronger result. P5 fired and was promoted from fallback to
 a core component.
 
-**Throwaway gate scripts** live in the session scratchpad and are **not**
-durable. C1 re-implements them properly under `scripts/`.
+**Gate scripts** are preserved verbatim under `scripts/gates/` (see its README
+for what each one established). They are exploratory — single seed, hard-coded
+paths, printed output. C1 re-implements U1 properly with saved artifacts.
+
+### C0 completion notes (16 Nov 2026)
+
+All four fixes applied, plus the biopython pin. 23 tests pass (was 17).
+
+- `metrics/structure.py` — `.get()` for `do_refine`/`use_openmm`; structure
+  metrics can now be constructed. Unblocks C2/C3.
+- `optimizer/a2c.py` — new `_normalize_advantages`: the `all_reduce` is now
+  reached on every rank, and statistics are pooled by count rather than
+  averaged per rank. `normalize_across_processes` is no longer used here
+  (it remains correct for PPO, whose minibatches are equal-sized across ranks).
+- `tune.py` — deep-copies the config at load and saves that snapshot, so
+  `config.json` retains `optimizer.name`. **Runs from here on are reproducible
+  from their own saved config; earlier run dirs are not.**
+- `protein_trainer/trainer.py` — CUDA RNG gather and restore are now guarded,
+  so CPU checkpointing works and resuming at a different world size logs a
+  warning instead of raising `IndexError`.
+
+The new `test_compute_logp_mask_counts_actions_through_the_stop_token` pins the
+shifted-mask invariant. If it ever fails, fix the caller, not the test.

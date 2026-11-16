@@ -60,6 +60,10 @@ class Trainer(ABC):
         return (current_step % check_point_freq == 0) and (current_step > 0)
 
     def _gather_cuda_rng_states(self):
+        # CPU runs have no device_ids and no CUDA RNG to gather; indexing
+        # device_ids[0] raised TypeError and made CPU checkpointing impossible.
+        if not torch.cuda.is_available() or self.device_ids is None:
+            return None
         wz = dist.get_world_size()
         rank = dist.get_rank()
         loc_s = torch.cuda.get_rng_state_all()[self.device_ids[0]].to(self.device)
@@ -102,8 +106,27 @@ class Trainer(ABC):
         ckpt = torch.load(ckpt_path, map_location, weights_only=False)
 
         torch.set_rng_state(ckpt["rng_state"]["torch"])
-        state = ckpt["rng_state"]["cuda"][dist.get_rank()].cpu()
-        torch.cuda.set_rng_state(state, device=self.device)
+
+        # Restoring CUDA RNG is best-effort: it is absent for CPU checkpoints,
+        # and the saved list is sized by the world size that wrote it, so a
+        # resume on a different number of ranks must not crash. Training
+        # resumes correctly without it; only exact sample-level reproducibility
+        # of the remaining steps is lost.
+        cuda_states = ckpt["rng_state"].get("cuda")
+        rank = dist.get_rank()
+        if (
+            cuda_states is not None
+            and torch.cuda.is_available()
+            and self.device_ids is not None
+        ):
+            if rank < len(cuda_states):
+                torch.cuda.set_rng_state(cuda_states[rank].cpu(), device=self.device)
+            else:
+                logger.info(
+                    f"Checkpoint holds {len(cuda_states)} CUDA RNG states but this "
+                    f"is rank {rank}; skipping CUDA RNG restore."
+                )
+
         np.random.set_state(ckpt["rng_state"]["numpy"])
         random.setstate(ckpt["rng_state"]["python"])
 
