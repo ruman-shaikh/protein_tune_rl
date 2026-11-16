@@ -605,3 +605,71 @@ by an order of magnitude or drop the claim.
 **Effect on the paper: none.** The thesis rests on C1/C3/C4 endpoint
 attackability, untouched. P2/C6 was always scoped as a methods appendix; it is
 now a methods footnote. Found before submission rather than in review.
+
+### C4′b run 1 — PAUSED at step 450/2000 (16 Nov 2026)
+
+`dssp_beta`, seed 0. Stopped deliberately to travel; **not** a failure.
+
+| | |
+|---|---|
+| steps completed | **450 / 2000** |
+| resume checkpoint | `test_run/c4prime/dssp_beta/a2c_s450.ckpt` (verified loads, step 450) |
+| reward | −0.572 → 1.676 (max 1.907) |
+| KL | 12.08 (max 14.95) |
+| measured rate | 6.51 s/step → **~2.8 h remaining** |
+| partial log (committed) | `results/c4prime_dssp_beta_seed0_partial_train_log.csv` |
+
+**Checkpoints live in `test_run/`, which is gitignored — they exist only on
+this laptop.** The train log is committed; the 35 MB checkpoints are not.
+
+#### Resume command
+
+```bash
+cd /home/ruman/repos/protein_tune_rl
+CK=$(ls test_run/c4prime/dssp_beta/a2c_s*.ckpt \
+     | sort -t_ -k2 -V | tail -1)
+/home/ruman/venvs/general/bin/python -c "
+import json; c=json.load(open('configs/experiments/a2c_iglm_hcdr3_dssp_beta.json'))
+c['checkpoint']='$CK'; json.dump(c,open('/tmp/resume_dssp.json','w'),indent=4)"
+/home/ruman/venvs/general/bin/python protein_tune_rl/tune.py \
+    --config-file /tmp/resume_dssp.json
+```
+
+`fixed_experiment_directory: true` means it writes back into the same
+directory. Resume is verified bit-exact (C4′a item 4).
+
+**Shutdown gotchas learned here, both from self-matching patterns:**
+
+- `pkill -f 'tune.py.*dssp_beta'` **kills its own shell**, because the pattern
+  appears in the shell's command line. Kill by PID instead.
+- Killing the parent leaves the `mp.spawn` child alive holding ~4.3 GB of GPU
+  memory. Check `nvidia-smi --query-compute-apps=pid,used_memory --format=csv`
+  after stopping any run and kill the orphan.
+
+#### Interim read on whether the fix is holding
+
+Sampled from checkpoints s50–s200 (4 samples × 48 contexts each):
+
+| step | reward | gen_len | sheet% | uniq% | editD | top residues |
+|---|---|---|---|---|---|---|
+| 50 | 0.720 | 9.3 | 33.1% | 100% | 6.2 | A17 D15 Y10 G9 |
+| 100 | 0.747 | 8.6 | 35.2% | 99.5% | 5.3 | A17 D15 Y11 R8 |
+| 150 | 0.760 | 8.1 | 33.3% | 99.5% | 4.8 | A20 D13 Y11 R10 |
+| 200 | 0.921 | 6.5 | 29.6% | 96.4% | 4.4 | A22 Y14 R12 D10 |
+
+Against the compositional reward's signature (length pinned at 22, 99.9%
+sheet-set residues), **neither known exploit appears**: no length pinning, no
+collapse into VIYFWLT. Top residues are A, Y, R, D — alanine is a *helix*
+former that the compositional reward penalises — so the policy is responding
+to geometry, not to a lookup table.
+
+**Watch on resume:** generated length is falling (9.3 → 6.5) and edit distance
+with it (6.2 → 4.4). β-strand fraction is a *ratio over the generated span*, so
+shrinking the span is a plausible second exploit — minimise the denominator
+instead of packing the numerator. Against that, C4a's `minimal` attack scored
+−3.64σ on this endpoint, so short spans are not automatically good. Re-read the
+composition at s1000 and s2000 and check whether length stabilises or collapses
+toward 2–3 residues.
+
+Caveat: 450/2000 steps. The compositional run did not saturate until ~step
+10,000, so nothing here is conclusive.
