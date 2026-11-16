@@ -255,7 +255,7 @@ Update and commit this table at every checkpoint boundary.
 | C0 | Unblock the code | no | **DONE** 16 Nov 2026 | `tests/test_c0_fixes.py`, 23 tests pass |
 | C1 | Lock composition attack, ESM-650M | **yes** | **network part DONE** 16 Nov; script promotion pending (offline) | 650M weights cached |
 | C2 | IgFold + DSSP setup | **yes** | **DONE** 16 Nov 2026 | `results/c2_smoke.csv`, `results/c2_versions.json` |
-| C3 | Structural measurement | no | not started | — |
+| C3 | Structural measurement | no | **DONE** 16 Nov 2026 | `results/c3_structure.csv`, `results/c3_sequences.csv` |
 | C4 | Multi-seed matrix | no | not started | — |
 | C5 | Endpoint benchmark | no | not started | — |
 | C6 | PPO correctness | no | not started | — |
@@ -321,9 +321,13 @@ peak 441 MB. On context 0 (n=1, C3 does this properly):
 | poly-V at max_length | **0.136** | 0.461 |
 | anchored | 0.318 | 0.492 |
 
-The edit that *maximises* the β-sheet reward **reduces predicted β-strand
-content about five-fold**. Reward and real β-strand move in opposite
-directions. At ~1.5 s/fold, C3's 200 folds is roughly 5 minutes.
+The edit that *maximises* the β-sheet reward reduces predicted β-strand
+content. At ~1.5 s/fold, C3's 200 folds is roughly 5 minutes.
+
+**Superseded by C3 — do not cite these numbers.** This single context showed
+0.636 → 0.136, a five-fold drop. At n=46 the effect is real and highly
+significant but far smaller (0.414 → 0.298). The n=1 result was not
+representative. Use the C3 numbers below.
 
 **Environment notes, carried forward:**
 
@@ -339,3 +343,42 @@ directions. At ~1.5 s/fold, C3's 200 folds is roughly 5 minutes.
   level, so either repair wandb or add a guarded stub there.
 - No system `mkdssp` (needs sudo). `pydssp` provides the DSSP algorithm in
   pure Python and needs no system package.
+
+### C3 completion notes (16 Nov 2026) — the closing leg, measured
+
+46 matched held-out contexts × 4 conditions = 184 structures. **All 184 folded,
+zero failures.** IgFold, `do_refine=False`, pydssp C3 assignment, β-strand
+fraction taken over the HCDR3 span of the predicted heavy chain.
+
+| Condition | n | reward | **β-strand (HCDR3)** | β-strand (whole H) | CDR len |
+|---|---|---|---|---|---|
+| native | 46 | 0.102 | **0.414** | 0.505 | 13.6 |
+| `iglm_base` (no RL) | 46 | −0.093 | **0.374** | 0.499 | 14.6 |
+| `policy_82k` | 46 | 3.325 | **0.298** | 0.482 | 22.0 |
+| `polyV_maxlen` | 46 | 3.330 | **0.277** | 0.477 | 22.0 |
+
+**Reward vs predicted HCDR3 β-strand fraction: Spearman ρ = −0.339,
+p = 2.5 × 10⁻⁶, n = 184.**
+
+What this establishes:
+
+1. **The reward is anti-correlated with the property it is named after.** Not
+   merely uninformative — *negatively* associated, significantly so.
+2. **Maximising it reduces predicted β-strand content in the designed loop**
+   by about 28% relative (0.414 → 0.298) while the reward rises roughly 32× in
+   normalised units (0.102 → 3.325).
+3. **The trained policy and the one-line string hack are indistinguishable on
+   both axes** — reward 3.325 vs 3.330, β-strand 0.298 vs 0.277. 82,000
+   optimisation steps bought nothing a hand-written constant does not.
+4. Whole-chain β-strand barely moves (0.505 → 0.482): the dilution that forces
+   the length exploit also hides it from any whole-chain readout.
+
+Honest effect size: the drop is moderate, not catastrophic. The policy still
+produces loops with ~0.30 β-strand fraction, because IgFold places strands at
+the CDR anchors regardless of the fill. The defensible claim is the
+anti-correlation plus the policy/one-liner equivalence, **not** "RL destroys
+β-sheet structure."
+
+Remaining caveats: single seed; one folding predictor (C5 or O4 should add a
+second); β-strand assignment depends on IgFold's loop placement, which is the
+least reliable part of any antibody structure prediction.
