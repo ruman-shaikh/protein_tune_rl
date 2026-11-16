@@ -39,12 +39,12 @@ Supporting results:
   SASA −0.06, vs ESM-region −0.09, vs ESM-chain 0.02, vs CDR length −0.07.
   ESM-region vs ESM-chain only 0.34. SASA vs CDR length 0.38 (SASA is partly a
   length proxy).
-- **Upstream PPO importance ratio is wrong by ~29%.** On a frozen, unchanged
-  policy, full-vocab vs constrained-support log-probs give mean
-  |ratio − 1| = 0.286 (median 0.281, max 0.502), 100% of sequences off by >5%.
-  PPO's clip band is ±0.2, so ratios sat outside it before any policy change.
-  *Caveat: measured on `s82000`, which is degenerate. Must be re-measured on
-  base IgLM — see C6.*
+- **Importance-ratio deviation — RETRACTED in its strong form, see C6 below.**
+  U2 measured mean |ratio − 1| = 0.286 on `a2c_s82000`. C6 re-measured on
+  **base IgLM** and got **0.0008**. The earlier claim that "the published PPO
+  baseline was mis-implemented" does not survive; at initialisation the bug is
+  numerically negligible. What survives is that its severity *scales with
+  policy drift*.
 - **Adaptive-KL controller bug never executed.** Every shipped config has
   `"target": null`, and `KLPenalty.__call__` guards the branch with
   `if self.target is not None`. Simulated on the real 4,337-step KL trajectory
@@ -573,3 +573,35 @@ exposure window is ~5 minutes.
 `a2c_iglm_hcdr3_dssp_beta.json` and
 `a2c_iglm_hcdr3_folding_confidence.json`, both with
 `fixed_experiment_directory: true` and `check_point_freq: 50`.
+
+### C6 completion notes (16 Nov 2026) — NEGATIVE, with a retraction
+
+**C6a. The 29% importance-ratio finding is retracted in its strong form.**
+
+| Policy | mean \|ratio − 1\| | >20% (PPO clip band) |
+|---|---|---|
+| `a2c_s82000` (degenerate; what U2 used) | 0.286 | 100% |
+| **base IgLM** (what published runs start from) | **0.0008** | **0%** |
+
+Three orders of magnitude smaller at initialisation. Base IgLM places almost
+no probability mass on the 12 masked control tokens, so renormalising over the
+constrained support barely changes the log-probs; the degenerate trained policy
+had drifted onto them. The earlier claim — "the published PPO baseline was
+mis-implemented" — **does not survive and is withdrawn.**
+
+What survives, and is worth one paragraph in the methods: **the bug's severity
+scales with policy drift**, 0.08% at initialisation rising to 29% once the
+policy has degenerated. It is invisible early in training and becomes severe
+exactly when the policy is going wrong, which reinforces the paper's main
+theme rather than constituting a contribution of its own.
+
+**C6b. Baseline action-leakage: inconclusive.** Held-out R² predicting the
+realised reward from the pooled final hidden state (5-fold ridge, n=48):
+prompt-only −0.035, prompt+completion +0.091, both ±0.36–0.40. No leakage
+demonstrated. n is far too small, and a pooled-hidden-state probe may be the
+wrong instrument for what a trained critic head could extract. Either scale n
+by an order of magnitude or drop the claim.
+
+**Effect on the paper: none.** The thesis rests on C1/C3/C4 endpoint
+attackability, untouched. P2/C6 was always scoped as a methods appendix; it is
+now a methods footnote. Found before submission rather than in review.
