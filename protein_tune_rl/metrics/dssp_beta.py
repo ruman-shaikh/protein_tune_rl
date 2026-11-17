@@ -37,12 +37,16 @@ class DSSPBetaStrand(StructureBasedMetric):
         fail_value: float = 0.0,
         region_only: bool = True,
         chain: str = "H",
+        mode: str = "fraction",
     ):
         if options is None:
             options = {"do_refine": False, "use_openmm": False, "do_renum": False}
+        if mode not in {"fraction", "count"}:
+            raise ValueError("mode must be 'fraction' or 'count'")
         super().__init__(folding_tool, options, mean, std, fail_value)
         self.region_only = region_only
         self.chain = chain
+        self.mode = mode
 
     def _assign(self, pdb_path, start, length):
         import pydssp
@@ -60,12 +64,21 @@ class DSSPBetaStrand(StructureBasedMetric):
         ss = pydssp.assign(coords, out_type="c3")
 
         if not self.region_only:
-            return float(np.mean(ss == "E"))
+            scope = ss
+        else:
+            scope = ss[start : start + length]
+            if len(scope) == 0:
+                return None
 
-        region = ss[start : start + length]
-        if len(region) == 0:
-            return None
-        return float(np.mean(region == "E"))
+        if self.mode == "count":
+            # Count, not fraction. A fraction is a ratio over the generated
+            # span, so truncating the span to a few framework-adjacent
+            # residues raises it (measured: the policy collapsed HCDR3 to a
+            # 3-5 residue stub, see Path_Forward.md section 6). A count cannot
+            # be gamed that way: a 5-residue stub caps at 5, below the ~5.3
+            # strand residues a native-length loop already provides.
+            return float(np.sum(scope == "E"))
+        return float(np.mean(scope == "E"))
 
     def __call__(self, chains: Dict):
         name = f"fold{str(self.count)}"

@@ -214,3 +214,44 @@ def test_resume_preserves_prior_train_log(tmp_path):
     # Rows written after the last checkpoint are dropped, so the log agrees
     # with the restored weights rather than double-counting those steps.
     assert kept["num_samples"].max() == ckpt_step * batch_size
+
+
+# --------------------------------------------------------------------------- #
+# DSSPBetaStrand count vs fraction mode
+# --------------------------------------------------------------------------- #
+def test_dssp_beta_count_mode_penalises_truncation():
+    """A count cannot be gamed by shrinking the span; a fraction can.
+
+    Measured at dssp_beta s450: the policy collapsed HCDR3 to a 3-5 residue
+    stub, which scores +1.676 under fraction (native: +2.013) but -1.959 under
+    count. This pins the arithmetic without needing IgFold.
+    """
+    import numpy as np
+
+    from protein_tune_rl.metrics.dssp_beta import DSSPBetaStrand
+
+    frac = DSSPBetaStrand.__new__(DSSPBetaStrand)
+    frac.region_only, frac.mode, frac.chain = True, "fraction", "H"
+    cnt = DSSPBetaStrand.__new__(DSSPBetaStrand)
+    cnt.region_only, cnt.mode, cnt.chain = True, "count", "H"
+
+    # A 5-residue stub with 3 strand residues vs a 14-residue loop with 6.
+    stub = np.array(list("EEE--"))
+    loop = np.array(list("EE-EE-E-E---E-"))
+
+    frac_stub = float(np.mean(stub == "E"))        # 0.60
+    frac_loop = float(np.mean(loop == "E"))        # 6/14 = 0.43
+    cnt_stub = float(np.sum(stub == "E"))          # 3
+    cnt_loop = float(np.sum(loop == "E"))          # 6
+
+    # The fraction rewards the stub over the real loop - that is the exploit.
+    assert frac_stub > frac_loop
+    # The count does not.
+    assert cnt_stub < cnt_loop
+
+
+def test_dssp_beta_rejects_unknown_mode():
+    from protein_tune_rl.metrics.dssp_beta import DSSPBetaStrand
+
+    with pytest.raises(ValueError, match="mode must be"):
+        DSSPBetaStrand(mode="ratio")

@@ -828,3 +828,41 @@ tighter threshold on *length deviation from the base policy* — rather than on
 absolute length or its variance — would detect earlier still. Worth tuning on
 held-out runs rather than on these, to avoid fitting the threshold to the
 example.
+
+### C6″ mitigation attempt: count instead of fraction (17 Nov 2026)
+
+If a ratio over the generated span invites truncation, score the **count** of
+β-strand residues instead. A 5-residue stub then caps at 5, below the ~5.3
+strand residues a native-length loop already provides. Implemented as
+`DSSPBetaStrand(mode="count")`; normalisation measured over the same 20 natives
+(count mean 5.300, std 1.1743).
+
+| HCDR3 | fraction | count |
+|---|---|---|
+| native `ASLNWDWYFDF` | +2.013 | **+1.448** |
+| `ARGGG` (the observed exploit) | **+1.676** | **−1.959** |
+| `ARDL` | −1.565 | −3.662 |
+| `polyV22` | −2.617 | −1.959 |
+
+Under fraction the exploit nearly matches native (+1.676 vs +2.013). Under
+count it is strongly penalised while native stays positive. **The mitigation
+defeats the known exploit.**
+
+**By this project's own finding, that proves little.** C4 established that
+hand-written attacks are a lower bound: `dssp_beta` passed all eight and RL
+broke it anyway. Count mode has an obvious inverse failure — maximise length
+to maximise count. A 22-residue span that does form strand would score about
+(22 − 5.3)/1.17 ≈ **+14σ**.
+
+**Falsifiable prediction, queued as a run rather than asserted:**
+
+> Ratio endpoints invite truncation; count endpoints invite elongation.
+> Neither is length-neutral.
+
+If the count run pins length at the cap of 22, the prediction holds and the
+paper gains a clean symmetry: *both naive normalisations of the same structural
+measurement are gameable, in opposite directions*. The candidate that could be
+length-neutral is explicit length-matching — penalise deviation from the native
+loop length — which becomes the next mitigation to test.
+
+Config: `configs/experiments/a2c_iglm_hcdr3_dssp_beta_count.json`.
