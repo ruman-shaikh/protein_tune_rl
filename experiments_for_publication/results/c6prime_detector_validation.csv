@@ -1,0 +1,4 @@
+policy,reward,verdict,gen_len_mean,gen_len_std,top4_share,pos_entropy,unique_frac,within_ctx_editD,reward_distinct_of_144,reward_length_rho,signals_fired
+base_iglm,ss_perc_sheet,CLEAN,14.9,2.8,0.446,3.04,1.000,10.8,101,-0.119,none
+a2c_s82000_compositional,ss_perc_sheet,GAMED,22.0,0.25,0.851,1.89,1.000,11.4,44,0.182,length_pinned_at_cap|length_var_collapsed|composition_concentrated
+a2c_s450_dssp_beta,dssp_beta,GAMED,5.0,0.23,0.637,2.40,0.938,2.9,4,0.974,length_collapsed|length_var_collapsed|reward_quantised|reward_is_function_of_length

@@ -748,3 +748,45 @@ than an addendum.
 - Whether the exploit survives a span-length penalty or a length-matched
   reward is the obvious follow-up, and is itself a paper-worthy mitigation
   experiment.
+
+### C6′ detector validation (17 Nov 2026) — three-point, and it holds
+
+144 generations × 39 contexts per policy, drawn from the 81,891-row training
+set. Artifact: `results/c6prime_detector_validation.csv`.
+
+| signal | base IgLM | compositional `s82000` | `dssp_beta` `s450` |
+|---|---|---|---|
+| generated length | 14.9 ± 2.8 | **22.0 (cap), 99%** | **5.0** |
+| length variance | 2.8 | **0.25** | **0.23** |
+| top-4 residue share | 0.446 | **0.851** | 0.637 |
+| positional entropy | 3.04 | 1.89 | 2.40 |
+| unique fraction | 1.000 | 1.000 | 0.938 |
+| within-context edit distance | 10.8 | 11.4 | 2.9 |
+| distinct reward values /144 | 101 | 44 | **4** |
+| reward–length ρ | −0.119 | +0.182 | **+0.974** |
+| **verdict** | **CLEAN** | **GAMED** | **GAMED** |
+
+The detector is **silent on the untrained policy** and fires on both gamed
+ones, via **complementary** signal sets: the compositional exploit trips
+cap-pinning and composition concentration; the structural exploit trips length
+collapse and reward quantisation. Neither trips the other's signals, and
+**diversity stays clean in all three** (unique ≥ 0.938 everywhere), so a
+diversity dashboard detects nothing in either failure.
+
+### Exploit #2 is premature termination, not motif discovery
+
+Base IgLM generations: `ARGGGSSWYFDG`, `ARDLFLCLGGLNHLDY`,
+`AKDGMPLPGTSLADHWFDP`, `ARGGDDFDY`.
+`dssp_beta` `s450` generations: `ARGGG`, `ARDL`, `AKDGM`, `ARGGD`.
+
+**These are exact prefixes of base IgLM's own outputs.** The policy has not
+found a special short motif; it emits IgLM's natural CDR-H3 opening and then
+fires the stop token early. The exploit is *truncation*.
+
+This connects to the stop-token credit issue deferred in the original audit
+(see [[a2c-fixes-status]] in the project memory): the stop action is masked out
+of `action_mask` by `_update_input`, which uses post-update `finished`, so
+stopping receives no explicit credit in the advantage — yet truncating is
+precisely what maximises a span-ratio reward. The deferred fix is now
+load-bearing for interpreting this result, and the obvious mitigation
+experiment is a length-matched or length-penalised reward.
