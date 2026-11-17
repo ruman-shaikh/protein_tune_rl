@@ -126,7 +126,7 @@ def main():
     print(f"run dir: {os.path.basename(run_dir)}")
     cfg_base = json.load(open(os.path.join(run_dir, "config.json")))
     print(f"config optimizer key = {cfg_base.get('optimizer')}   "
-          f"<- 'name' missing is the tune.py save-order bug")
+          f"<- pre-C0 runs lack 'name' (tune.py save-order bug, fixed in C0)")
     print(f"KL weight={cfg_base['KL_penalty']['weight']} "
           f"target={cfg_base['KL_penalty']['target']}")
 

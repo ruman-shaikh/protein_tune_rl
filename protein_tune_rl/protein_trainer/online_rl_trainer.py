@@ -285,7 +285,28 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
     def run(self, exp_output_dir):
         batch_size = self.batch_size * dist.get_world_size()
 
+        # Resuming must not truncate the log: `to_csv` overwrites, so starting
+        # from an empty frame destroys every step logged before the pause.
+        log_path = exp_output_dir / "train_log.csv"
         log_df = pd.DataFrame()
+        if self.ckpt and log_path.exists():
+            try:
+                prior = pd.read_csv(log_path, index_col=0)
+                # Keep only rows at or before the checkpoint, so the log agrees
+                # with the weights we actually restored.
+                resume_samples = self.ckpt["step"] * batch_size
+                log_df = prior[prior["num_samples"] <= resume_samples].reset_index(
+                    drop=True
+                )
+                logger.info(
+                    f"Resuming train log: kept {len(log_df)} of {len(prior)} "
+                    f"prior rows (step {self.ckpt['step']})"
+                )
+            except Exception as e:
+                logger.error(
+                    f"Could not reuse existing train log ({e}); starting a new "
+                    f"one. Prior history remains in the file until the first write."
+                )
         current_step = 0
         epoch = 0
         start_time = time.time()
@@ -380,7 +401,7 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
                             KL_mean.cpu().numpy() / -self.KL_penalty.beta
                         ]
                     log_df = pd.concat([log_df, step_log], ignore_index=True)
-                    log_df.to_csv(exp_output_dir / "train_log.csv")
+                    log_df.to_csv(log_path)
                 dist.barrier()
 
                 if current_step >= self.total_optimization_steps:

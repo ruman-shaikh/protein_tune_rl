@@ -626,7 +626,7 @@ this laptop.** The train log is committed; the 35 MB checkpoints are not.
 
 ```bash
 cd /home/ruman/repos/protein_tune_rl
-CK=$(ls test_run/c4prime/dssp_beta/a2c_s*.ckpt \
+CK=$(find test_run/c4prime/dssp_beta -name 'a2c_s*.ckpt' \
      | sort -t_ -k2 -V | tail -1)
 /home/ruman/venvs/general/bin/python -c "
 import json; c=json.load(open('configs/experiments/a2c_iglm_hcdr3_dssp_beta.json'))
@@ -673,3 +673,78 @@ toward 2–3 residues.
 
 Caveat: 450/2000 steps. The compositional run did not saturate until ~step
 10,000, so nothing here is conclusive.
+
+---
+
+## 6. MAJOR RESULT (17 Nov 2026): the structural fix also fails
+
+**`dssp_beta` is exploitable. A coordinate-derived, DSSP-grounded endpoint
+falls to optimisation pressure by a mechanism the hand-written attacks missed.**
+
+Detector report on `a2c_s450.ckpt`, 144 generations over 39 contexts drawn from
+the 81,891-row training set:
+
+```
+1 length           mean=5.0  std=0.2  min=3  max=5     (native 13.6, cap 22)
+2 composition      A21% R19% G12% D11%  share=0.637    <- NOT concentrated
+3 determinism      unique=0.938  editD=2.9             <- still diverse
+4 reward quantised 4 distinct values over 144 generations
+5 reward-length    rho = +0.974
+```
+
+Example generations: `ARGGG`, `ARDL`, `AREGL`, `ARDGY`, `ARDAW`, `AKDGM`,
+`AKDIN`, `ARGGD`.
+
+**Mechanism: delete the loop instead of building a sheet.** HCDR3 collapses
+from ~13.6 residues to a 3–5 residue stub beginning `AR`/`AK`, the canonical
+germline start of CDR-H3. β-strand fraction is a *ratio over the generated
+span*; a 3–5 residue stub flush against the framework inherits the framework's
+β-strand continuation, so the ratio lands on a favourable quantised value
+(0.6 = 3/5). The policy is not designing a β-sheet loop — it is removing the
+loop so that what remains reads as framework.
+
+Biologically this is worse than the composition exploit: HCDR3 length is the
+primary determinant of antibody binding, and a 5-residue HCDR3 is not a
+functional antibody.
+
+### Why this is the strong outcome
+
+1. **A new mechanism, not a repeat.** C4's `minimal` attack scored −3.64σ on
+   this endpoint, which is why the screen passed it. That attack used the
+   *native* first two residues; RL found the short sequences that do score.
+   Hand-written attacks are a lower bound on exploitability, confirmed
+   empirically.
+2. **Different signals fire for different exploits.** Composition share is
+   0.637 and uniqueness 0.938, so neither the composition nor the diversity
+   signature triggers — only length collapse and reward quantisation. No single
+   signal catches both exploits, which is the argument for the detector.
+3. **Reward quantisation is a new oracle-free tell.** Four distinct reward
+   values over 144 varied contexts says the output is context-independent, and
+   it needs nothing but the policy's own generations.
+4. **Diversity metrics fail again.** 93.8% unique, edit distance 2.9 — a
+   diversity dashboard reads healthy while the policy emits 5-residue stubs.
+
+### Effect on the paper
+
+The thesis strengthens from *"cheap endpoints are exploitable, use structural
+ones"* to:
+
+> **Every endpoint tested is exploitable, including coordinate-derived ones.
+> Exploits differ in mechanism, no single guardrail detects them all, and
+> hand-written attack screens systematically underestimate exploitability.
+> The detector is the contribution that generalises.**
+
+That is a main-venue claim, and it makes C6′ the primary contribution rather
+than an addendum.
+
+### Caveats
+
+- Single seed, step 450 of 2,000. The run continues; the collapse may deepen
+  or partially reverse.
+- `dssp_beta` normalisation (mean 0.419, std 0.108) came from 20 natives at
+  native lengths. A 5-residue span is far outside that distribution, so the
+  normalised magnitudes are not strictly comparable — the *length collapse* is
+  the robust observation, not the exact reward value.
+- Whether the exploit survives a span-length penalty or a length-matched
+  reward is the obvious follow-up, and is itself a paper-worthy mitigation
+  experiment.

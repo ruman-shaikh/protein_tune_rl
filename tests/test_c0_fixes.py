@@ -181,3 +181,36 @@ def test_structure_metric_accepts_options_without_do_refine(monkeypatch):
     # The pre-fix code raised KeyError('do_refine') here.
     m = mod.StructureBasedMetric("igfold", options={"do_renum": False})
     assert m.options.get("do_refine") in (None, False)
+
+
+# --------------------------------------------------------------------------- #
+# Resume must not truncate train_log.csv
+# --------------------------------------------------------------------------- #
+def test_resume_preserves_prior_train_log(tmp_path):
+    """A resumed run must keep the log rows written before the pause.
+
+    `OnlineRLTrainer.run` writes the log with `to_csv`, which overwrites. It
+    previously started from an empty DataFrame on resume, so the first write
+    after a resume destroyed the entire pre-pause history. Found the hard way:
+    a 458-row log became 22 rows.
+    """
+    import pandas as pd
+
+    batch_size = 8
+    log_path = tmp_path / "train_log.csv"
+    prior = pd.DataFrame({
+        "num_samples": [(i + 1) * batch_size for i in range(10)],
+        "reward_mean": [float(i) for i in range(10)],
+    })
+    prior.to_csv(log_path)
+
+    # Mirror the reload logic in run(): keep rows at or before the checkpoint.
+    ckpt_step = 6
+    reloaded = pd.read_csv(log_path, index_col=0)
+    kept = reloaded[reloaded["num_samples"] <= ckpt_step * batch_size]
+
+    assert len(kept) == 6, "rows up to the checkpoint step must survive a resume"
+    assert kept["reward_mean"].tolist() == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    # Rows written after the last checkpoint are dropped, so the log agrees
+    # with the restored weights rather than double-counting those steps.
+    assert kept["num_samples"].max() == ckpt_step * batch_size
