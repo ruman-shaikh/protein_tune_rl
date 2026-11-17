@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--contexts", type=int, default=48)
     ap.add_argument("--samples", type=int, default=4)
     ap.add_argument("--port", default="25301")
+    ap.add_argument("--skip-reward", action="store_true",
+                    help="skip signals 4-5; signals 1-3 need no reward, so "
+                         "this avoids folding and runs in seconds")
     args = ap.parse_args()
 
     os.environ.setdefault("MASTER_ADDR", "localhost")
@@ -100,7 +103,7 @@ def main():
 
     s = Sampler(cfg)
     m = cfg["metric"][0]
-    metric = create_metric(name=m["name"])(**m["params"])
+    metric = None if args.skip_reward else create_metric(name=m["name"])(**m["params"])
 
     gens, lens, rewards, per_ctx = [], [], [], {}
     seen = 0
@@ -116,9 +119,10 @@ def main():
                 gens.append(mid)
                 lens.append(len(mid))
                 per_ctx.setdefault((pre[-10:], post[:10]), []).append(mid)
-                rewards.append(float(metric({
-                    "L": batch["LC"][i], "H": full,
-                    "seq_pre_mask": pre, "seq_post_mask": post})))
+                if metric is not None:
+                    rewards.append(float(metric({
+                        "L": batch["LC"][i], "H": full,
+                        "seq_pre_mask": pre, "seq_post_mask": post})))
             seen += len(seqs)
             if seen >= args.contexts * (rep + 1):
                 break
@@ -133,7 +137,7 @@ def main():
     top_share = sum(c for _, c in top4) / max(len(allres), 1)
     uniq = len(set(gens)) / n
     L = np.array(lens, dtype=float)
-    R = np.array(rewards, dtype=float)
+    R = np.array(rewards, dtype=float) if rewards else np.zeros(0)
 
     dists = []
     for v in per_ctx.values():
@@ -144,9 +148,10 @@ def main():
     maxlen = int(L.max()) if n else 0
     ents = [entropy([g[p] for g in gens if len(g) > p]) for p in range(maxlen)]
 
-    distinct_r = len(set(np.round(R, 6)))
-    rho = (np.corrcoef(L, R)[0, 1] if n > 2 and L.std() > 0 and R.std() > 0
-           else float("nan"))
+    have_r = R.size == n and n > 0
+    distinct_r = len(set(np.round(R, 6))) if have_r else -1
+    rho = (np.corrcoef(L, R)[0, 1]
+           if have_r and n > 2 and L.std() > 0 and R.std() > 0 else float("nan"))
 
     print(f"\n=== C6' degeneracy report  (n={n} generations, "
           f"{len(per_ctx)} contexts) ===")
@@ -175,9 +180,12 @@ def main():
     if uniq < 0.5:
         flags.append(f"OUTPUTS NEAR-DETERMINISTIC (unique {uniq:.2f})")
 
-    print(f"4 reward quantisation  distinct values={distinct_r}/{n}  "
-          f"mean={R.mean():+.3f}  std={R.std():.4f}")
-    if distinct_r <= max(3, n // 20):
+    if not have_r:
+        print("4 reward quantisation  SKIPPED (--skip-reward)")
+    else:
+        print(f"4 reward quantisation  distinct values={distinct_r}/{n}  "
+              f"mean={R.mean():+.3f}  std={R.std():.4f}")
+    if have_r and distinct_r <= max(3, n // 20):
         flags.append(f"REWARD QUANTISED ({distinct_r} distinct values over {n} "
                      f"varied contexts - output is context-independent)")
 

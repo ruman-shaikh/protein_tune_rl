@@ -790,3 +790,41 @@ stopping receives no explicit credit in the advantage — yet truncating is
 precisely what maximises a span-ratio reward. The deferred fix is now
 load-bearing for interpreting this result, and the obvious mitigation
 experiment is a length-matched or length-penalised reward.
+
+### C6′ early warning: detection at step 250 of 2,000
+
+Length-collapse trajectory across every `dssp_beta` checkpoint, 24 contexts ×
+2 samples each, `--skip-reward` so no folding is needed (signals 1–3 are
+reward-independent and run in seconds). Artifact:
+`results/c6prime_collapse_trajectory.csv`.
+
+| step | len mean | len std | unique | editD | top-4 share | detector |
+|---|---|---|---|---|---|---|
+| base | 14.9 | 2.8 | 1.000 | 10.8 | 0.446 | — |
+| 50 | 9.1 | 2.0 | 1.000 | 5.8 | 0.526 | — |
+| 100 | 8.9 | 1.8 | 1.000 | 5.8 | 0.528 | — |
+| 150 | 8.3 | 1.8 | 1.000 | 5.3 | 0.555 | — |
+| 200 | 6.4 | 1.7 | 1.000 | 4.9 | 0.550 | — |
+| **250** | **4.9** | **0.4** | 1.000 | 3.1 | 0.573 | **FIRES** |
+| 350 | 5.0 | **0.0** | 0.958 | 2.7 | 0.704 | FIRES |
+| 550 | 5.0 | 0.2 | 0.958 | 2.6 | 0.676 | FIRES |
+
+Three claims this supports:
+
+1. **Early warning.** The collapse completes by step 250 — 12.5% of the budget
+   — then locks at exactly 5.0 for 300+ steps. Detection at step 250 saves 87%
+   of the compute. Signals 1–3 need no reward evaluation, so the check costs
+   seconds and can run as a training callback.
+2. **Diversity monitoring never fires, at any checkpoint.** Unique fraction
+   stays 0.958–1.000 from base through step 550. A diversity dashboard reports
+   a healthy run throughout both failures.
+3. **Composition monitoring never fires either**, for this exploit: top-4
+   share rises 0.446 → ~0.68 but never crosses the 0.80 threshold that the
+   compositional exploit trips at 0.851. Single-signal monitoring misses one
+   exploit or the other.
+
+The drift is visible even at step 50 (length 9.1 against base 14.9), so a
+tighter threshold on *length deviation from the base policy* — rather than on
+absolute length or its variance — would detect earlier still. Worth tuning on
+held-out runs rather than on these, to avoid fitting the threshold to the
+example.
