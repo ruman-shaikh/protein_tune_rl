@@ -956,3 +956,72 @@ before collapse (steps 0–150), which are known-not-yet-gamed.
 Redirect the ~20 GPU-hours earmarked for seeds 1–2 into negatives. Same cost,
 and it converts "we found four exploits" into "an instrument with a known
 error rate", which is the difference between an anecdote and a measure.
+
+## 9. C8 calibration (18 Nov 2026) — the negative control was itself gamed
+
+**Result: no clean negative obtained, and a validity threat to signals 1–3.**
+
+Built `NativeIdentity` (position-wise identity to the native HCDR3) as a
+reward that "cannot be satisfied by a constant", since the target varies per
+context. **That claim was wrong.** HCDR3s share a conserved germline prefix
+(`AR`, `AKD`), so a fixed 4-residue stub collects partial credit across many
+contexts without tracking the prompt. The sanity check showed it — a 2-residue
+prefix scored +0.400 — and it was dismissed as "bounded". It was not.
+
+Run: 2000/2000 steps, reward 0.267 → 0.146 (it got *worse*). Final policy emits
+`ARDP`, `ARDL`, `TRDP`, `AKDP`, `AKDI` — length 4.0, composition share 0.909
+(the most concentrated of any policy tested), unique fraction 0.132.
+**A fourth exploit, same truncation mechanism.**
+
+### Detector bug found and fixed
+
+The detector built its `chains` dict without `masked_seq`, so `NativeIdentity`
+saw an empty native and returned 0.000 for all 144 samples, invalidating
+signals 4–5 (reported as `distinct=1`, `rho=nan`). Fixed; it now mirrors
+`OnlineRLTrainer.run`. Corrected values: `distinct=28/96`, mean `+0.139`
+(consistent with the training log's 0.146), `rho=+0.027`.
+
+### Signal-by-signal state across five policies
+
+| policy | 1 length | 2 composition | 3 determinism | 4 quantisation | 5 ρ |
+|---|---|---|---|---|---|
+| base IgLM (untrained) | — | — | — | — | — |
+| compositional `s82000` | **pinned at cap** | **0.851** | — | — | — |
+| dssp fraction `s2000` | **collapsed** | — | — | **2/144** | **+1.000** |
+| dssp count `s2000` | **var collapsed** | — | — | **2/144** | — |
+| native identity `s2000` | **collapsed** | **0.909** | **0.132** | — | — |
+
+**This splits the detector in two:**
+
+- **Signals 4–5 (reward structure) are diagnostic.** They fired on both
+  ratio/count endpoints and stayed silent on native-identity, whose reward is
+  genuinely continuous and length-independent. They measure a property of the
+  *reward*, not of training.
+- **Signals 1–3 (output statistics) are confounded.** They fired on all four
+  trained policies. Length narrowing, composition concentration and increasing
+  determinism are also what ordinary convergence looks like. **Unusable until
+  calibrated.**
+
+### The threat, stated plainly
+
+The detector has fired on **5 of 5** trained policies and stayed silent only on
+an **untrained** model. On the present evidence we cannot distinguish:
+
+- "the detector detects gaming" — the claim
+- "the detector detects training" — equally consistent
+
+C8 sharpened this rather than resolving it.
+
+### C9 — the decisive experiment
+
+A negative with **no reward to game at all**: supervised fine-tuning on native
+HCDR3s with cross-entropy. No RL, no scalar reward, so there is nothing to
+exploit by construction. Then run the detector on it.
+
+- If signals 1–3 stay quiet → they are diagnostic, and the instrument stands.
+- If they fire → they measure training, not gaming, and the detector must be
+  cut back to signals 4–5 only (which only apply when a scalar reward exists).
+
+Either outcome is publishable, and until it is run the detector's headline
+claim is unsupported. This is now the highest-priority experiment in the
+project, ahead of any further seeds or endpoints.

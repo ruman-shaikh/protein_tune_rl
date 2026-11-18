@@ -341,6 +341,11 @@ class OnlineRLTrainer(Trainer, OnlineRLSampler):
                         "H": seq,
                         "seq_pre_mask": tokenized_batch["seq_pre_mask"][i],
                         "seq_post_mask": tokenized_batch["seq_post_mask"][i],
+                        # The native region the policy is replacing. Metrics
+                        # that compare against it (e.g. native_identity, the
+                        # detector's negative control) need it; the collator
+                        # already produces it and it was simply not forwarded.
+                        "masked_seq": tokenized_batch["masked_seq"][i],
                     }
                     reward[i] = self.metric(chains)
                 reward = reward.to(logp.device)

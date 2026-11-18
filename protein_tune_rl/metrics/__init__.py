@@ -52,6 +52,11 @@ def create_metric(name):
 
             return IgLMTokenwiseKLDivergence
 
+        if name == "native_identity":
+            from protein_tune_rl.metrics.native_identity import NativeIdentity
+
+            return NativeIdentity
+
         if name == "dssp_beta":
             from protein_tune_rl.metrics.dssp_beta import DSSPBetaStrand
 

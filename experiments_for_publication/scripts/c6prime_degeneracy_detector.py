@@ -122,7 +122,12 @@ def main():
                 if metric is not None:
                     rewards.append(float(metric({
                         "L": batch["LC"][i], "H": full,
-                        "seq_pre_mask": pre, "seq_post_mask": post})))
+                        "seq_pre_mask": pre, "seq_post_mask": post,
+                        # Metrics that compare against the native region need
+                        # it. Omitting this silently returned 0.0 for every
+                        # sample under native_identity, invalidating signals
+                        # 4 and 5. Mirrors OnlineRLTrainer.run.
+                        "masked_seq": tok["masked_seq"][i]})))
             seen += len(seqs)
             if seen >= args.contexts * (rep + 1):
                 break
