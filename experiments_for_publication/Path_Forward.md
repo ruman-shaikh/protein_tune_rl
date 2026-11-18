@@ -335,11 +335,12 @@ Update and commit this table at every checkpoint boundary.
 | C2 | IgFold + DSSP setup | **yes** | **DONE** 16 Nov 2026 | `results/c2_smoke.csv`, `results/c2_versions.json` |
 | C3 | Structural measurement | no | **DONE** 16 Nov 2026 | `results/c3_structure.csv`, `results/c3_sequences.csv` |
 | C4 | Endpoint attackability screen (restructured) | no | **DONE** 16 Nov 2026 | `results/c4a_*.csv`, `results/c4b_*.csv` |
-| C4′ | Train against surviving endpoints (research core) | no | blocked on C4 | — |
-| C5 | Endpoint benchmark table | no | blocked on C4′ | — |
-| C6 | PPO correctness | no | not started (independent — parallelisable) | — |
-| C6′ | Gaming detector | no | blocked on C4′ | — |
+| C4′ | Train against surviving endpoints (research core) | no | **DONE** 18 Nov 2026 — both seed-0 runs complete (2000/2000) | `test_run/c4prime/dssp_beta{,_count}` |
+| C5 | Endpoint benchmark table | no | not started (unblocked) | — |
+| C6 | PPO correctness | no | **DONE** 17 Nov — negative, 29% claim retracted | `results/c6_ppo_correctness.csv` |
+| C6′ | Gaming detector | no | **DONE** 17–18 Nov — built + validated 4 policies | `results/c6prime_*.csv` |
 | C7 | Figures and draft | no | not started | — |
+| **C8** | **Calibration: clean/negative runs (THE GAP)** | no | **NEXT** | — |
 
 **Dependency graph** (for parallel scheduling): C4a ∥ C4b ∥ C6 are mutually
 independent. C4′ needs C4. C5 and C6′ need C4′. C7 needs everything.
@@ -866,3 +867,92 @@ length-neutral is explicit length-matching — penalise deviation from the nativ
 loop length — which becomes the next mitigation to test.
 
 Config: `configs/experiments/a2c_iglm_hcdr3_dssp_beta_count.json`.
+
+---
+
+## 7. Both C4′ runs complete (18 Nov 2026) — and the mitigation failed differently than predicted
+
+Both seed-0 runs reached 2000/2000 unattended overnight via the chain script.
+
+### Full detector table
+
+| signal | base IgLM | compositional `s82000` | **fraction `s2000`** | **count `s2000`** |
+|---|---|---|---|---|
+| generated length | 14.9 ± 2.8 | 22.0 (cap) | **5.0** | **11.0** |
+| length std | 2.8 | 0.25 | 0.17 | 0.14 |
+| top-4 share | 0.446 | 0.851 | 0.618 | 0.644 |
+| positional entropy | 3.04 | 1.89 | 2.43 | **1.03** |
+| unique fraction | 1.000 | 1.000 | 0.931 | 0.847 |
+| distinct rewards /144 | 101 | 44 | **2** | **2** |
+| reward–length ρ | −0.119 | +0.182 | **+1.000** | −0.254 |
+| **verdict** | **CLEAN** | **GAMED** | **GAMED** | **GAMED** |
+
+Fraction at `s2000`: ρ = **+1.000** exactly — the reward is a perfect function
+of generated length. Collapse was stable from step 250 to step 2000, i.e.
+**1,750 steps produced no further learning.**
+
+### The count-mode prediction was WRONG
+
+Predicted: elongation to the cap of 22. Observed: **length locked at 11** with
+the most rigid output of any policy tested (positional entropy 1.03 vs base
+3.04). Generations: `AREGGSRYFDY`, `AREGATCYFDY`, `ARDGGGTYFDY`,
+`ARDIGAYYFDY` — a fixed template `AR[DEV]·G·x·x·x·YFDY`, where `AR` is the
+germline N-terminal start and **`YFDY` is the canonical CDR-H3 C-terminal
+motif**.
+
+Why not 22: count rewards *absolute* strand residues, but IgFold assigns
+strand only near the framework anchors. Extra middle residues bulge as coil
+and add nothing, so the optimum is the shortest span that lands strand on
+**both** anchors — not the longest.
+
+**Diagnosis, which is deeper than the normalisation:** DSSP strand assignment
+inside a CDR loop is dominated by **anchor geometry**. The policy satisfies it
+with canonical germline motifs rather than designing anything. No choice of
+normalisation fixes that, which is why both fraction and count fell. Count is
+*more* degenerate by reward quantisation (2 values, entropy 1.03) despite
+defeating the hand-written attack.
+
+Third confirmation of the project's methodological point: **a mitigation that
+defeats the known attack says almost nothing about the next one.**
+
+## 8. Reframing (18 Nov 2026): this is a run-level reliability measure
+
+"In-silico proxies are gameable" is Goodhart and is not publishable. The
+operative question is narrower and operational:
+
+> An in-silico endpoint is a **triage filter** deciding which candidates get
+> synthesised — never the ground truth, which is the wet lab. So a gamed
+> endpoint does not invalidate the science; it **wastes the synthesis budget.**
+> Can you tell your optimiser went degenerate *before* spending it?
+
+What we provide is therefore a **reliability measure for the training run**,
+not for the candidate. Two properties must be stated plainly:
+
+- **One-sided.** Firing proves degeneracy (4/4 gamed policies). Silence proves
+  nothing — a clean run can still produce useless antibodies.
+- **Uncalibrated.** Validated against exactly **one** clean policy (untrained
+  base IgLM). Length narrowing and entropy reduction are also what *healthy*
+  convergence looks like, so the false-positive rate on a legitimately
+  converging run is **unknown**.
+
+Claims to drop: "every endpoint is exploitable" as a headline — unfalsifiable
+as stated. Claims that survive, because they are specific and mechanistic:
+ESM-2 masked PLL cannot serve as a plausibility filter (it rates `"V"×22`
+~2 nats/residue above a real CDR at both 8M and 650M); and diversity metrics
+are *structurally incapable* of detecting this failure, because the degenerate
+optimum is a flat plateau rather than a point.
+
+### C8 — Calibration (the next checkpoint, and the gap that matters)
+
+The detector has four positives and one negative. It needs **negatives**:
+runs that converge *productively*, to establish that the signatures stay quiet.
+
+Design: produce clean runs rather than more exploits. Candidates —
+(a) supervised fine-tuning on native HCDR3s, which must converge without
+degenerating; (b) a reward that is not satisfiable by a constant, e.g. a
+sequence-identity-to-native target; (c) early checkpoints of the gamed runs
+before collapse (steps 0–150), which are known-not-yet-gamed.
+
+Redirect the ~20 GPU-hours earmarked for seeds 1–2 into negatives. Same cost,
+and it converts "we found four exploits" into "an instrument with a known
+error rate", which is the difference between an anecdote and a measure.
